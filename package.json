@@ -1,0 +1,38 @@
+{
+  "name": "yoof1337",
+  "version": "0.1.0",
+  "description": "Terminal-based coding agent: LLM tool-use loop with sandboxed file/shell tools and human-in-the-loop guardrails",
+  "type": "module",
+  "bin": {
+    "yoof1337": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli/index.js",
+    "dev": "tsx src/cli/index.ts",
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "llamacpp:smoke": "npm run build && node scripts/llamacpp-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.17",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "diff": "^7.0.0",
+    "execa": "^9.6.0",
+    "highlight.js": "^11.11.1",
+    "ignore": "^7.0.5",
+    "ink": "^7.1.1",
+    "ink-text-input": "^6.0.0",
+    "marked": "^18.0.6",
+    "proper-lockfile": "^4.1.2",
+    "react": "^19.2.7"
+  }
+}

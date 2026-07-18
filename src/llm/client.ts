@@ -1,0 +1,50 @@
+﻿/**
+ * Provider-agnostic LLM interface. Everything above this layer (agent loop,
+ * tools, CLI) only ever sees these types -- swapping OpenAI for a local
+ * llama.cpp server is a config change, not a code change.
+ */
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  /** JSON Schema for the tool's input. */
+  inputSchema: Record<string, unknown>;
+}
+
+export interface ToolCallRequest {
+  id: string;
+  name: string;
+  /** Parsed JSON arguments. */
+  input: Record<string, unknown>;
+}
+
+export type ChatMessage =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | null; toolCalls?: ToolCallRequest[] }
+  | { role: "tool"; toolCallId: string; content: string };
+
+export interface LlmResponse {
+  /** Assistant text, if any. */
+  text: string | null;
+  /** Tool calls requested by the model; empty array means final text response. */
+  toolCalls: ToolCallRequest[];
+}
+
+export interface LlmClient {
+  readonly model: string;
+  readonly contextWindow: number;
+  chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LlmResponse>;
+}
+
+/** Rough token estimate (~4 chars/token). Good enough for compaction thresholds. */
+export function estimateTokens(messages: ChatMessage[]): number {
+  let chars = 0;
+  for (const m of messages) {
+    if (typeof m.content === "string") chars += m.content.length;
+    if (m.role === "assistant" && m.toolCalls) {
+      for (const tc of m.toolCalls) chars += tc.name.length + JSON.stringify(tc.input).length;
+    }
+  }
+  return Math.ceil(chars / 4);
+}

@@ -1,0 +1,23 @@
+{
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "contextWindow": 128000
+    },
+    "llamacpp": {
+      "baseUrl": "http://localhost:8080/v1",
+      "model": "qwen2.5-coder-1.5b-instruct",
+      "apiKeyEnv": null,
+      "contextWindow": 262144
+    }
+  },
+  "compaction": {
+    "thresholdRatio": 0.75,
+    "keepLastMessages": 8
+  },
+  "maxToolIterationsPerTurn": 50,
+  "commandTimeoutMs": 120000
+}
