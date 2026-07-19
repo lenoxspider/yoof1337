@@ -48,15 +48,14 @@ export function newSessionId(): string {
   return crypto.randomBytes(8).toString("hex");
 }
 
-export async function listSessions(dir: string): Promise<SessionMeta[]> {
+export async function listSessions(dir: string, sandboxRoot?: string): Promise<SessionMeta[]> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    const metas: SessionMeta[] = [];
+    let metas: SessionMeta[] = [];
     for (const e of entries) {
       if (!e.isFile() || !e.name.endsWith(".jsonl")) continue;
       try {
         const file = path.join(dir, e.name);
-        // Just read the first line for the meta event
         const fh = await fs.open(file, "r");
         const buf = Buffer.alloc(4096);
         const { bytesRead } = await fh.read(buf, 0, 4096, 0);
@@ -72,6 +71,9 @@ export async function listSessions(dir: string): Promise<SessionMeta[]> {
         // ignore
       }
     }
+    if (sandboxRoot) {
+      metas = metas.filter((m) => m.sandboxRoot === sandboxRoot);
+    }
     metas.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return metas;
   } catch {
@@ -79,8 +81,8 @@ export async function listSessions(dir: string): Promise<SessionMeta[]> {
   }
 }
 
-export async function getLastSessionId(dir: string): Promise<string | null> {
-  const sessions = await listSessions(dir);
+export async function getLastSessionId(dir: string, sandboxRoot?: string): Promise<string | null> {
+  const sessions = await listSessions(dir, sandboxRoot);
   if (sessions.length === 0) return null;
   return sessions[0].id;
 }

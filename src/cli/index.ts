@@ -152,7 +152,7 @@ async function initSessionLogger(
   let baseId = args.resume;
   
   if (args.continue && !baseId) {
-    baseId = await getLastSessionId(sessionsDir) ?? undefined;
+    baseId = await getLastSessionId(sessionsDir, sandboxRoot) ?? undefined;
   }
 
   if (baseId) {
@@ -341,7 +341,7 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       continue;
     }
     if (line === "/sessions") {
-      const sessions = await listSessions(sessionsDir);
+      const sessions = await listSessions(sessionsDir, sandbox.root);
       if (sessions.length === 0) console.log("(no saved sessions)");
       else for (const s of sessions) console.log(`${s.id}  ${s.updatedAt}  ${s.title}`);
       continue;
@@ -506,7 +506,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     }
   };
 
-  const sessions = await listSessions(sessionsDir);
+  const sessions = await listSessions(sessionsDir, sandbox.root);
   if (sessions.length > 0) {
     const latest = sessions[0];
     const resumeAns = await app.readLine(`Resume last session (${latest.title})? [Y/n]> `);
@@ -659,7 +659,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         continue;
       }
       if (line === "/sessions") {
-        const list = await listSessions(sessionsDir);
+        const list = await listSessions(sessionsDir, sandbox.root);
         if (list.length === 0) app.println("(no saved sessions)");
         else {
           for (const s of list) {
