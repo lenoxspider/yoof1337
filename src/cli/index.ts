@@ -481,7 +481,17 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     const cwdStr = sandbox.root.split(path.sep).pop() || sandbox.root;
     const exec = sandbox.execMode === "docker" ? "docker" : "host";
     const approval = args.yolo ? "yolo" : "prompt";
-    app.setStatusline?.(`💻 ${cwdStr}  ⚡ exec:${exec}  ✅ apprv:${approval}  🪙 tok:~${tokenEstimate}  🌿 git:${git}`.trim());
+    
+    const parts = [
+      `💻 ${cwdStr}`,
+      `⚡ exec:${exec}`,
+      `✅ apprv:${approval}`,
+      `🪙 tok:~${tokenEstimate}`
+    ];
+    if (git) {
+      parts.push(`🌿 git:${git}`);
+    }
+    app.setStatusline?.(parts.join("  "));
   }
   await refreshStatusline();
 
@@ -739,7 +749,7 @@ async function getGitStatusLine(cwd: string): Promise<string> {
     if (branch.exitCode !== 0) return "";
     const status = await execa("git", ["status", "--porcelain=v1"], { cwd, windowsHide: true, reject: false });
     const dirty = (status.stdout ?? "").trim().length > 0;
-    return `git:${branch.stdout.trim()}${dirty ? "*" : ""}`;
+    return `${branch.stdout.trim()}${dirty ? "*" : ""}`;
   } catch {
     return "";
   }
