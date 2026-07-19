@@ -364,17 +364,101 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
 
 function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): React.JSX.Element {
   const [snap, setSnap] = useState<StoreSnapshot>(store.get());
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const [prevLength, setPrevLength] = useState(snap.transcript.length);
 
   useEffect(() => store.subscribe(() => setSnap(store.get())), [store]);
 
+  // Adjust scroll offset when transcript length changes (e.g. new lines printed or compaction)
+  useEffect(() => {
+    if (snap.transcript.length !== prevLength) {
+      const diff = snap.transcript.length - prevLength;
+      setPrevLength(snap.transcript.length);
+      setScrollOffset((o) => {
+        const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
+        const limit = Math.max(0, snap.transcript.length - maxLines);
+        if (diff < 0) {
+          return Math.min(limit, Math.max(0, o + diff));
+        }
+        if (o > 0 && diff > 0) {
+          return Math.min(limit, o + diff);
+        }
+        return Math.min(limit, o);
+      });
+    }
+  }, [snap.transcript.length, prevLength]);
+
+  // Mouse wheel scroll via SGR mouse tracking
+  const transcriptLengthRef = React.useRef(snap.transcript.length);
+  useEffect(() => {
+    transcriptLengthRef.current = snap.transcript.length;
+  }, [snap.transcript.length]);
+
+  useEffect(() => {
+    const stdin = process.stdin;
+    // Enable SGR mouse tracking: Mode 1000 (report clicks/scrolls), Mode 1006 (SGR coordinates)
+    process.stdout.write("\x1b[?1000h\x1b[?1006h");
+
+    const onData = (buf: Buffer) => {
+      if (snap.modal) return; // ignore mouse scrolling if modal is active
+      const str = buf.toString("utf8");
+      const match = str.match(/\u001b\[<(\d+);(\d+);(\d+)M/);
+      if (match) {
+        const button = parseInt(match[1], 10);
+        if (button === 64) {
+          setScrollOffset((o) => {
+            const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
+            const limit = Math.max(0, transcriptLengthRef.current - maxLines);
+            return Math.min(limit, o + 3);
+          });
+        } else if (button === 65) {
+          setScrollOffset((o) => Math.max(0, o - 3));
+        }
+      }
+    };
+
+    stdin.on("data", onData);
+    return () => {
+      // Disable SGR mouse tracking on cleanup
+      process.stdout.write("\x1b[?1006l\x1b[?1000l");
+      stdin.off("data", onData);
+    };
+  }, [snap.modal]);
+
   const view = useMemo(() => {
     const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
-    return snap.transcript.slice(Math.max(0, snap.transcript.length - maxLines));
-  }, [snap.transcript]);
+    const end = snap.transcript.length - scrollOffset;
+    const start = Math.max(0, end - maxLines);
+    return snap.transcript.slice(start, end);
+  }, [snap.transcript, scrollOffset]);
 
   useInput((input, key) => {
     if (snap.modal) return; // let modal handle keys
     
+    // Page up / down and Shift + Up/Down for scrollback
+    if (key.pageUp || (key.shift && key.upArrow)) {
+      setScrollOffset((o) => {
+        const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
+        const limit = Math.max(0, snap.transcript.length - maxLines);
+        const amount = key.pageUp ? Math.max(1, Math.floor(maxLines / 2)) : 1;
+        return Math.min(limit, o + amount);
+      });
+      return;
+    }
+
+    if (key.pageDown || (key.shift && key.downArrow)) {
+      setScrollOffset((o) => {
+        const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
+        const amount = key.pageDown ? Math.max(1, Math.floor(maxLines / 2)) : 1;
+        return Math.max(0, o - amount);
+      });
+      return;
+    }
+
+    if (key.return) {
+      setScrollOffset(0);
+    }
+
     if (snap.autocompleteItems.length > 0) {
       if (key.upArrow) {
         store.navigateAutocomplete("up");
@@ -439,6 +523,11 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
             <Text key={i}>{l}</Text>
           ))}
         </Box>
+        {scrollOffset > 0 && (
+          <Box paddingX={1}>
+            <Text backgroundColor="yellow" color="black" bold> ▲ SCROLLED UP ({scrollOffset} lines) • Press Enter or Shift+Down to return ▲ </Text>
+          </Box>
+        )}
         {(snap.modal || snap.tools.length > 0) && (
           <Box borderStyle="round" borderColor="gray" flexDirection="column" paddingX={1}>
             {snap.modal ? (
