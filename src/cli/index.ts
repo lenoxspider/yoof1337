@@ -506,9 +506,11 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     }
   };
 
-  const sessions = await listSessions(sessionsDir, sandbox.root);
-  if (sessions.length > 0) {
-    const latest = sessions[0];
+  const allSessions = await listSessions(sessionsDir, sandbox.root);
+  // Exclude the session we just created so we don't ask to resume ourselves
+  const previousSessions = allSessions.filter((s) => s.id !== state.sessionId);
+  if (previousSessions.length > 0) {
+    const latest = previousSessions[0];
     const resumeAns = await app.readLine(`Resume last session (${latest.title})? [Y/n]> `);
     if (resumeAns !== null && resumeAns.trim().toLowerCase() !== "n") {
       try {
