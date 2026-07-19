@@ -53,19 +53,18 @@ export interface AgentConfig {
 }
 
 const DEFAULTS: AgentConfig = {
-  provider: "openai",
+  provider: "llamacpp",
   providers: {
-    openai: {
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini",
-      apiKeyEnv: "OPENAI_API_KEY",
-      contextWindow: 128_000,
-    },
     llamacpp: {
-      baseUrl: "http://localhost:8080/v1",
-      model: "qwen3.5-35b-a3b",
+      baseUrl: "http://219.122.229.5:45965/v1",
+      model: "Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf",
       apiKeyEnv: null,
-      contextWindow: 262_144,
+      contextWindow: 131072,
+      temperature: 0.6,
+      top_p: 0.95,
+      top_k: 20,
+      min_p: 0,
+      presence_penalty: 0,
     },
   },
   compaction: { thresholdRatio: 0.75, keepLastMessages: 8, useHistorySnip: true, useContextCollapse: true },
