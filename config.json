@@ -1,5 +1,5 @@
 {
-  "provider": "openai",
+  "provider": "llamacpp",
   "providers": {
     "openai": {
       "baseUrl": "https://api.openai.com/v1",
@@ -8,10 +8,10 @@
       "contextWindow": 128000
     },
     "llamacpp": {
-      "baseUrl": "http://localhost:8080/v1",
-      "model": "qwen2.5-coder-1.5b-instruct",
+      "baseUrl": "http://219.122.229.5:45965/v1",
+      "model": "Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf",
       "apiKeyEnv": null,
-      "contextWindow": 262144
+      "contextWindow": 32768
     }
   },
   "compaction": {

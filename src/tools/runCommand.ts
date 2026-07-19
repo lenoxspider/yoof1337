@@ -78,8 +78,10 @@ function formatResult(
   stderr: string,
   timeoutMs: number
 ): string {
+  // If execa reports a timeout, treat it as a failure even if exitCode is null/0.
+  const effectiveExit = timedOut ? 124 : exitCode;
   const parts = [
-    `exit code: ${exitCode}${timedOut ? ` (killed: timeout after ${timeoutMs}ms)` : ""}`,
+    `exit code: ${effectiveExit}${timedOut ? ` (killed: timeout after ${timeoutMs}ms)` : ""}`,
     `stdout:\n${truncate(stdout)}`,
     `stderr:\n${truncate(stderr)}`,
   ];

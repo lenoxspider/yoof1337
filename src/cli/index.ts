@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
@@ -6,7 +6,7 @@ import { loadConfig } from "../config.js";
 import { loadDotEnv } from "../config/dotenv.js";
 import { createClient } from "../llm/factory.js";
 import { estimateTokens } from "../llm/client.js";
-import { createAgentState, worldStateSummary } from "../loop/state.js";
+import { createAgentState, worldStateSummary, AgentState } from "../loop/state.js";
 import { runTurn } from "../loop/agentLoop.js";
 import { compact } from "../loop/compaction.js";
 import type { SandboxContext } from "../tools/sandbox.js";
@@ -14,6 +14,7 @@ import { ansi, color } from "./ui.js";
 import { TuiApp } from "./tui.js";
 import { createInkUi } from "./inkUi.js";
 import { renderMarkdownToPlain } from "./markdown.js";
+import { hintForToolResult } from "./hints.js";
 import { execa } from "execa";
 import { toolDefinitions } from "../tools/definitions.js";
 import {
@@ -22,7 +23,6 @@ import {
   listSessions,
   loadSession,
   newSessionId,
-  saveSession,
   toStoredSession,
 } from "../sessions/store.js";
 
@@ -30,6 +30,17 @@ const SYSTEM_PROMPT = `You are yoof1337, a terminal-based coding agent working i
 You have tools to read/write files, list directories, run shell commands, and search code. All paths are relative to the working directory; you cannot access anything outside it.
 Work iteratively: inspect before you modify, run code to verify your changes, and react to tool errors (they are returned as tool results).
 Mutating actions (write_file, run_command) may require user approval and can be denied -- if denied, adjust your approach rather than retrying the same call.
+
+MULTI-AGENT ORCHESTRATION:
+You can delegate work to background sub-agents using the task and agent tools:
+- agent_run: Spawn a sub-agent with a custom system prompt to work on a task asynchronously.
+- task_create: Create a task and optionally assign it to a named team.
+- task_get / task_list / task_output: Monitor progress of background tasks.
+- task_stop: Cancel a running task.
+- team_create / team_delete: Create specialized teams (e.g. "frontend", "testing") with shared system prompts.
+- send_message: Send a message to another agent by task ID.
+For complex multi-step projects, consider breaking work into parallel tasks assigned to specialized sub-agents.
+
 When the task is complete, reply with a concise final summary instead of calling more tools.`;
 
 function buildSystemPrompt(providerName: string): string {
@@ -58,17 +69,22 @@ interface CliArgs {
   configPath?: string;
   envPath?: string;
   sessionsDir?: string;
+  continue: boolean;
+  resume?: string;
+  forkSession: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  // Default to running run_command in Docker for isolation.
+  // Default to running run_command on the host (normal terminal behavior).
   const args: CliArgs = {
     yolo: false,
     plain: false,
     legacyTui: false,
-    docker: true,
+    docker: false,
     unsafeHost: false,
     dir: process.cwd(),
+    continue: false,
+    forkSession: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -83,6 +99,9 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === "--config") args.configPath = argv[++i];
     else if (a === "--env") args.envPath = argv[++i];
     else if (a === "--sessions-dir") args.sessionsDir = argv[++i];
+    else if (a === "--continue") args.continue = true;
+    else if (a === "--resume") args.resume = argv[++i];
+    else if (a === "--fork-session") args.forkSession = true;
     else if (a === "--help" || a === "-h") {
       console.log(`yoof1337 -- terminal coding agent
 
@@ -92,12 +111,15 @@ usage: yoof1337 [options]
   --config <path>    path to config.json
   --env <path>       .env file path (default: ./\.env)
   --sessions-dir <p> session store directory (default: user-local)
+  --continue         resume the most recent session
+  --resume <id>      resume a specific session
+  --fork-session     create a new session from a resumed one
   --yolo             auto-approve all tool calls (mutating ones included)
   --plain            disable TUI (use basic readline)
   --legacy-tui       use the lightweight built-in TUI (non-Ink)
-  --docker           run run_command inside docker (default)
+  --docker           run run_command inside docker (opt-in isolation)
   --docker-image <i> docker image to use (default: node:22)
-  --unsafe-host      run run_command on the host (DANGEROUS)
+  --unsafe-host      (deprecated) same as default host mode
 
 in-session commands: /compact  /state  /help  /exit`);
       process.exit(0);
@@ -106,28 +128,97 @@ in-session commands: /compact  /state  /help  /exit`);
   return args;
 }
 
+import { SessionLogger } from "../sessions/logger.js";
+import { getLastSessionId } from "../sessions/store.js";
+
+import { mcpManager } from "../tools/MCPConnectionManager.js";
+
+async function initSessionLogger(
+  args: CliArgs, 
+  sessionsDir: string, 
+  providerName: string, 
+  client: ReturnType<typeof createClient>, 
+  sandboxRoot: string
+): Promise<{ state: AgentState; logger: SessionLogger }> {
+  // Initialize MCP servers in the background
+  mcpManager.initialize().catch(err => {
+    console.error("Failed to initialize MCP servers:", err);
+  });
+  
+  const { taskStore } = await import("../tasks/taskStore.js");
+  taskStore.init(sandboxRoot);
+
+  let state = createAgentState(buildSystemPrompt(providerName));
+  let baseId = args.resume;
+  
+  if (args.continue && !baseId) {
+    baseId = await getLastSessionId(sessionsDir) ?? undefined;
+  }
+
+  if (baseId) {
+    try {
+      const stored = await loadSession(sessionsDir, baseId);
+      applyStoredSession(state, stored);
+      
+      if (args.forkSession) {
+        state.sessionId = newSessionId();
+        const logger = new SessionLogger(sessionsDir, state.sessionId);
+        await logger.logSync({
+          type: "meta",
+          id: state.sessionId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          provider: providerName,
+          model: client.model,
+          sandboxRoot,
+          title: stored.meta.title + " (forked)",
+        });
+        
+        // rewrite all history into the new log
+        for (const msg of state.messages) {
+          if (msg.role === "user") await logger.logSync({ type: "user", content: msg.content ?? "", originalTask: state.originalTask ?? undefined });
+          else if (msg.role === "assistant") logger.logAsync({ type: "assistant", content: msg.content ?? "", toolCalls: msg.toolCalls });
+          else if (msg.role === "tool") logger.logAsync({ type: "tool", toolCallId: msg.toolCallId ?? "", content: msg.content ?? "" });
+        }
+        logger.logAsync({ type: "progress", world: state.world });
+        return { state, logger };
+      } else {
+        state.sessionId = stored.meta.id;
+        const logger = new SessionLogger(sessionsDir, state.sessionId);
+        return { state, logger };
+      }
+    } catch (err) {
+      console.log(color(`resume failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
+      // fall through to new session
+    }
+  }
+
+  // New session
+  state.sessionId = newSessionId();
+  const logger = new SessionLogger(sessionsDir, state.sessionId);
+  await logger.logSync({
+    type: "meta",
+    id: state.sessionId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    provider: providerName,
+    model: client.model,
+    sandboxRoot,
+    title: "untitled",
+  });
+  return { state, logger };
+}
+
 async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const dotenv = loadDotEnv({ envPath: args.envPath });
   const config = loadConfig(args.configPath);
   const providerName = args.provider ?? config.provider;
   const client = createClient(config, args.provider);
-  const state = createAgentState(buildSystemPrompt(providerName));
-  state.sessionId = newSessionId();
-  const sessionCreatedAt = new Date().toISOString();
   const sessionsDir = path.resolve(args.sessionsDir ?? defaultSessionsDir());
+  const { state, logger } = await initSessionLogger(args, sessionsDir, providerName, client, sandbox.root);
 
   const persist = async (): Promise<void> => {
-    if (!state.sessionId) return;
-    await saveSession(
-      sessionsDir,
-      toStoredSession(state, {
-        id: state.sessionId,
-        createdAt: sessionCreatedAt,
-        provider: providerName,
-        model: client.model,
-        sandboxRoot: sandbox.root,
-      })
-    );
+    await logger.flush();
   };
 
   console.log(`yoof1337 -- model: ${client.model} | sandbox: ${sandbox.root}`);
@@ -137,7 +228,8 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   console.log(color("type a task, or /help for commands\n", ansi.dim));
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const io = { print: (t: string) => console.log(t), rl, format: renderMarkdownToPlain };
+  const permissions = { yolo: args.yolo, allowCommandPrefixes: state.world.permissions.allowCommandPrefixes };
+  const io = { print: (t: string) => console.log(t), rl, format: renderMarkdownToPlain, sessionLogger: logger };
 
   async function cmdStatus(): Promise<void> {
     try {
@@ -202,12 +294,22 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     if (line === "/exit" || line === "/quit") break;
     if (line === "/help") {
       console.log(
-        `${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
+        `${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session\n${color("/undo", ansi.cyan)}     git rollback\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
       );
       continue;
     }
     if (line === "/status") {
       await cmdStatus();
+      continue;
+    }
+    if (line === "/undo") {
+      try {
+        await execa("git", ["reset", "--hard", "HEAD"], { cwd: sandbox.root, windowsHide: true });
+        await execa("git", ["clean", "-fd"], { cwd: sandbox.root, windowsHide: true });
+        console.log(color("Undo complete. Git state reverted.", ansi.green));
+      } catch (err) {
+        console.log(color(`undo failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
+      }
       continue;
     }
     if (line === "/diff") {
@@ -285,9 +387,9 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       continue;
     }
 
-    await runTurn(state, line, client, config, sandbox, { yolo: args.yolo }, io);
+    await runTurn(state, line, client, config, sandbox, permissions, io);
     try {
-      await persist();
+      await logger.flush();
     } catch {
       // ignore autosave failures
     }
@@ -302,43 +404,67 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const config = loadConfig(args.configPath);
   const providerName = args.provider ?? config.provider;
   const client = createClient(config, args.provider);
-  const state = createAgentState(buildSystemPrompt(providerName));
-  state.sessionId = newSessionId();
-  const sessionCreatedAt = new Date().toISOString();
   const sessionsDir = path.resolve(args.sessionsDir ?? defaultSessionsDir());
+  const { state, logger } = await initSessionLogger(args, sessionsDir, providerName, client, sandbox.root);
 
   const app: {
     start: () => void;
     stop: () => void;
     println: (t: string) => void;
     setStatusline?: (t: string) => void;
+    setStatus?: (t: string) => void;
     setTools?: (lines: string[]) => void;
+    setLastFoldedOutput?: (output: string | null) => void;
     readLine: (promptLabel?: string) => Promise<string | null>;
     createQuestioner: () => any;
+    onSigInt?: (handler: () => void) => void;
   } = (args.legacyTui
     ? new TuiApp({
         title: "yoof1337",
         subtitle: `model: ${client.model} | sandbox: ${sandbox.root}`,
       })
     : createInkUi({
-        title: "yoof1337",
-        subtitle: `model: ${client.model} | sandbox: ${sandbox.root}`,
+        title: "👾 yoof1337",
+        subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
       })) as any;
   app.start();
   const questioner = app.createQuestioner();
+  const permissions = { yolo: args.yolo, allowCommandPrefixes: state.world.permissions.allowCommandPrefixes };
   const io = {
     print: (t: string) => app.println(t),
     rl: questioner,
     format: renderMarkdownToPlain,
+    sessionLogger: logger,
+    formatToolResult: (toolName: string, result: string) => "", // Handled in onToolEnd instead
     onToolStart: (name: string) => {
       toolPanel.push(`> ${name}`);
       app.setTools?.(toolPanel);
     },
-    onToolEnd: (name: string, result: string, approved: boolean) => {
+    onToolEnd: (name: string, result: string, approved: boolean, durationMs?: number) => {
+      const timeStr = durationMs ? `took ${(durationMs / 1000).toFixed(1)}s` : "";
       const head = approved ? `✓ ${name}` : `✗ ${name}`;
       const firstLine = String(result ?? "").split(/\r?\n/, 1)[0] ?? "";
-      toolPanel.push(`${head}: ${firstLine.slice(0, 60)}`);
+      toolPanel.push(`${head}: ${firstLine.slice(0, 60)} ${timeStr}`);
       app.setTools?.(toolPanel);
+
+      // Inline feedback & human-readable errors with hints
+      const outText = String(result ?? "");
+      let hint = hintForToolResult(name, outText) || "";
+      if (hint) {
+        hint = `\n${color(hint, ansi.yellow)}`;
+      }
+
+      const formattedResult = io.formatToolResult(name, outText);
+      const outputLines = formattedResult.split("\n");
+      let foldedResult = formattedResult;
+      if (outputLines.length > 20) {
+        foldedResult = outputLines.slice(0, 20).join("\n") + color(`\n... [${outputLines.length - 20} lines folded] (Press Ctrl+O to expand)`, ansi.dim);
+        app.setLastFoldedOutput?.(formattedResult);
+      } else {
+        app.setLastFoldedOutput?.(null);
+      }
+
+      app.println(`${color(head, approved ? ansi.green : ansi.red)} ${color(timeStr, ansi.dim)}\n${foldedResult}${hint}`);
     },
   };
 
@@ -352,25 +478,50 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   async function refreshStatusline(): Promise<void> {
     const tokenEstimate = estimateTokens(state.messages);
     const git = await getGitStatusLine(sandbox.root);
+    const cwdStr = sandbox.root.split(path.sep).pop() || sandbox.root;
     const exec = sandbox.execMode === "docker" ? "docker" : "host";
     const approval = args.yolo ? "yolo" : "prompt";
-    app.setStatusline?.(`exec:${exec} approvals:${approval} tokens:~${tokenEstimate} ${git}`.trim());
+    app.setStatusline?.(`💻 ${cwdStr}  ⚡ exec:${exec}  ✅ apprv:${approval}  🪙 tok:~${tokenEstimate}  🌿 git:${git}`.trim());
   }
   await refreshStatusline();
 
   const persist = async (): Promise<void> => {
-    if (!state.sessionId) return;
-    await saveSession(
-      sessionsDir,
-      toStoredSession(state, {
-        id: state.sessionId,
-        createdAt: sessionCreatedAt,
-        provider: providerName,
-        model: client.model,
-        sandboxRoot: sandbox.root,
-      })
-    );
+    await logger.flush();
   };
+
+  const printResumedMessages = (state: ReturnType<typeof createAgentState>) => {
+    for (const msg of state.messages) {
+      if (msg.role === "user" && msg.content) {
+        app.println(`\n${color("you>", ansi.blue)} ${msg.content}`);
+      } else if (msg.role === "assistant") {
+        if (msg.content) {
+          app.println(`\n${renderMarkdownToPlain(msg.content)}`);
+        }
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          for (const call of msg.toolCalls) {
+            app.println(`${color("✓ " + call.name, ansi.green)} ${color("(resumed)", ansi.dim)}`);
+          }
+        }
+      }
+    }
+  };
+
+  const sessions = await listSessions(sessionsDir);
+  if (sessions.length > 0) {
+    const latest = sessions[0];
+    const resumeAns = await app.readLine(`Resume last session (${latest.title})? [Y/n]> `);
+    if (resumeAns !== null && resumeAns.trim().toLowerCase() !== "n") {
+      try {
+        const stored = await loadSession(sessionsDir, latest.id);
+        applyStoredSession(state, stored);
+        state.sessionId = stored.meta.id;
+        printResumedMessages(state);
+        app.println(color(`resumed session ${stored.meta.id}`, ansi.green));
+      } catch (err) {
+        app.println(color(`resume failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
+      }
+    }
+  }
 
   async function cmdStatus(): Promise<void> {
     try {
@@ -441,6 +592,8 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         app.println(`${color("/sessions", ansi.cyan)} list saved sessions`);
         app.println(`${color("/resume <id>", ansi.cyan)} resume a saved session`);
         app.println(`${color("/save", ansi.cyan)}     save current session`);
+        app.println(`${color("/undo", ansi.cyan)}     step back one checkpoint`);
+        app.println(`${color("/redo", ansi.cyan)}     step forward one checkpoint`);
         app.println(`${color("/status", ansi.cyan)}   git status`);
         app.println(`${color("/diff", ansi.cyan)}     git diff`);
         app.println(`${color("/gh auth", ansi.cyan)}  show gh auth status`);
@@ -453,6 +606,28 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       }
       if (line === "/status") {
         await cmdStatus();
+        continue;
+      }
+      if (line === "/undo") {
+        app.println(color("rolling back changes...", ansi.yellow));
+        try {
+          await execa("git", ["reset", "--hard", "HEAD~1"], { cwd: sandbox.root, windowsHide: true });
+          await execa("git", ["clean", "-fd"], { cwd: sandbox.root, windowsHide: true });
+          app.println(color("Undo complete. Stepped back one checkpoint.", ansi.green));
+        } catch (err) {
+          app.println(color(`undo failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
+        }
+        continue;
+      }
+      if (line === "/redo") {
+        app.println(color("stepping forward...", ansi.yellow));
+        try {
+          await execa("git", ["reset", "--hard", "HEAD@{1}"], { cwd: sandbox.root, windowsHide: true });
+          await execa("git", ["clean", "-fd"], { cwd: sandbox.root, windowsHide: true });
+          app.println(color("Redo complete. Stepped forward one checkpoint.", ansi.green));
+        } catch (err) {
+          app.println(color(`redo failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
+        }
         continue;
       }
       if (line === "/diff") {
@@ -484,30 +659,21 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         continue;
       }
       if (line === "/sessions") {
-        const sessions = await listSessions(sessionsDir);
-        if (sessions.length === 0) app.println("(no saved sessions)");
-        else for (const s of sessions) app.println(`${s.id}  ${s.updatedAt}  ${s.title}`);
+        const list = await listSessions(sessionsDir);
+        if (list.length === 0) app.println("(no saved sessions)");
+        else {
+          for (const s of list) {
+            app.println(`${color(s.id, ansi.cyan)} ${color(s.title, ansi.bold)} ${color(`(${s.model})`, ansi.dim)}`);
+          }
+        }
         continue;
       }
       if (line.startsWith("/resume ")) {
-        const id = line.slice("/resume ".length).trim();
-        try {
-          const stored = await loadSession(sessionsDir, id);
-          applyStoredSession(state, stored);
-          state.sessionId = stored.meta.id;
-          app.println(color(`resumed session ${stored.meta.id}: ${stored.meta.title}`, ansi.green));
-        } catch (err) {
-          app.println(color(`resume failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
-        }
+        app.println(color("Please restart yoof1337 and pass the --resume <id> flag.", ansi.yellow));
         continue;
       }
       if (line === "/save") {
-        try {
-          await persist();
-          app.println(color("saved", ansi.green));
-        } catch (err) {
-          app.println(color(`save failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
-        }
+        app.println(color("session is automatically saved continuously to " + logger.filepath, ansi.green));
         continue;
       }
       if (line === "/state") {
@@ -530,7 +696,29 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         continue;
       }
 
-      await runTurn(state, line, client, config, sandbox, { yolo: args.yolo }, io);
+      let abortController: AbortController | null = null;
+      let turnRunning = false;
+
+      app.onSigInt?.(() => {
+        if (turnRunning && abortController) {
+          app.println(color("Canceling operation...", ansi.yellow));
+          abortController.abort();
+        } else {
+          app.stop();
+          process.exit(0);
+        }
+      });
+
+      app.setStatus?.(color("working...", ansi.dim));
+      abortController = new AbortController();
+      turnRunning = true;
+      const turnIo = { ...io, abortSignal: abortController.signal };
+      await runTurn(state, line, client, config, sandbox, permissions, turnIo);
+      turnRunning = false;
+      abortController = null;
+      app.onSigInt?.(() => { app.stop(); process.exit(0); }); // reset to exit
+
+      app.setStatus?.(color("done (enter next task)", ansi.dim));
       try {
         await persist();
       } catch {
@@ -578,14 +766,8 @@ async function main(): Promise<void> {
     dockerImage: args.dockerImage,
   };
 
-  if (sandbox.execMode === "host") {
-    console.log(
-      color(
-        "WARNING: --unsafe-host enabled. run_command will execute on your host machine, not in Docker.",
-        ansi.yellow
-      )
-    );
-  }
+  const { initCoordinator } = await import("../tasks/coordinator.js");
+  initCoordinator(sandbox);
 
   const wantTui = !args.plain && process.stdout.isTTY && process.stdin.isTTY;
   if (wantTui) return runTui(args, sandbox);

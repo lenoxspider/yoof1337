@@ -19,12 +19,81 @@ Rules:
 - Prefer short bullet-like strings in arrays.
 - Do not include raw tool output; extract only the key facts.`;
 
+export const COMPACT_BOUNDARY_MARKER = "[compact_boundary]";
+
 export function shouldCompact(
-  messages: ChatMessage[],
+  state: AgentState,
   client: LlmClient,
   cfg: CompactionConfig
 ): boolean {
-  return estimateTokens(messages) > client.contextWindow * cfg.thresholdRatio;
+  if (cfg.useHistorySnip) snipCompact(state);
+  if (cfg.useContextCollapse) contextCollapse(state);
+  return estimateTokens(state.messages) > client.contextWindow * cfg.thresholdRatio;
+}
+
+export function snipCompact(state: AgentState): void {
+  const newMsgs: ChatMessage[] = [];
+  const boundaries: number[] = [];
+
+  for (let i = 0; i < state.messages.length; i++) {
+    const m = state.messages[i];
+    
+    // Remove zombie assistants (no content, no tools)
+    if (m.role === "assistant" && !m.content && (!m.toolCalls || m.toolCalls.length === 0)) {
+      continue;
+    }
+
+    // Keep track of boundaries
+    if (m.content === COMPACT_BOUNDARY_MARKER) {
+      boundaries.push(newMsgs.length);
+    }
+
+    newMsgs.push(m);
+  }
+
+  // Remove orphaned tool messages
+  const withoutOrphans: ChatMessage[] = [];
+  for (const m of newMsgs) {
+    if (m.role === "tool") {
+      // Find matching assistant call
+      const hasCall = withoutOrphans.some(
+        (prev) => prev.role === "assistant" && prev.toolCalls?.some((tc) => tc.id === m.toolCallId)
+      );
+      if (!hasCall) continue;
+    }
+    withoutOrphans.push(m);
+  }
+
+  // Ensure at most 1 boundary (the latest)
+  if (boundaries.length > 1) {
+    const latest = boundaries[boundaries.length - 1];
+    state.messages = withoutOrphans.filter((m, idx) => m.content !== COMPACT_BOUNDARY_MARKER || idx === latest);
+  } else {
+    state.messages = withoutOrphans;
+  }
+}
+
+export function contextCollapse(state: AgentState): void {
+  if (state.messages.length === 0) return;
+  const collapsed: ChatMessage[] = [state.messages[0]];
+  for (let i = 1; i < state.messages.length; i++) {
+    const prev = collapsed[collapsed.length - 1];
+    const curr = state.messages[i];
+
+    if (prev.role === "user" && curr.role === "user") {
+      prev.content = `${prev.content}\n\n${curr.content}`;
+    } else if (
+      prev.role === "assistant" &&
+      curr.role === "assistant" &&
+      (!prev.toolCalls || prev.toolCalls.length === 0) &&
+      (!curr.toolCalls || curr.toolCalls.length === 0)
+    ) {
+      prev.content = `${prev.content}\n\n${curr.content}`;
+    } else {
+      collapsed.push({ ...curr });
+    }
+  }
+  state.messages = collapsed;
 }
 
 /**
@@ -36,7 +105,7 @@ export async function compact(
   state: AgentState,
   client: LlmClient,
   cfg: CompactionConfig,
-  opts?: { cwdForRepoSnapshot?: string }
+  opts?: { cwdForRepoSnapshot?: string; sessionLogger?: import("../sessions/logger.js").SessionLogger }
 ): Promise<void> {
   const history = state.messages;
 
@@ -85,15 +154,17 @@ export async function compact(
   }
 
   const rebuilt: ChatMessage[] = [{ role: "system", content: state.systemPrompt }];
+  
+  let summaryContent = `[Context was compacted. Summary of the conversation so far:]\n${summary}\n\n[World state:]\n${worldStateSummary(state.world)}`;
   if (state.originalTask) {
-    rebuilt.push({ role: "user", content: `Original task (verbatim):\n${state.originalTask}` });
-    rebuilt.push({ role: "assistant", content: "Understood. Continuing with this task." });
+    summaryContent = `Original task (verbatim):\n${state.originalTask}\n\n` + summaryContent;
   }
-  rebuilt.push({
-    role: "user",
-    content: `[Context was compacted. Summary of the conversation so far:]\n${summary}\n\n[World state:]\n${worldStateSummary(state.world)}`,
-  });
-  rebuilt.push({ role: "assistant", content: "Noted. I have the summarized context and will continue." });
+  
+  rebuilt.push({ role: "user", content: summaryContent });
+  rebuilt.push({ role: "assistant", content: COMPACT_BOUNDARY_MARKER });
+  if (opts?.sessionLogger) {
+    opts.sessionLogger.logAsync({ type: "system", subtype: "compact_boundary", summary });
+  }
   rebuilt.push(...tail);
 
   state.messages = rebuilt;

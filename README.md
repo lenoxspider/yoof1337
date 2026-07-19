@@ -46,7 +46,7 @@ Defense layers, weakest to strongest:
 1. **Denylist** (`src/tools/runCommand.ts`) -- blocks obviously destructive patterns (`rm -rf /`, fork bombs, device writes). A safety net only.
 2. **Permission prompts** -- every `run_command`/`write_file` requires explicit approval unless `--yolo`.
 3. **Path sandbox** -- all file tools resolve paths against `--dir` and reject escapes.
-4. **Container mode (default for `run_command`)** -- `run_command` runs inside Docker by default when available. Use `--unsafe-host` only if you explicitly want host execution.
+4. **Container mode (opt-in)** -- run with `--docker` to execute `run_command` inside Docker for better isolation.
 5. **Recommended: containerize the whole agent** -- for real isolation, run the entire CLI inside Docker, e.g.:
 
 ```sh

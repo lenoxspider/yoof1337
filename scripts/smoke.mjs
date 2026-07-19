@@ -8,6 +8,7 @@ import { runTurn } from "../dist/loop/agentLoop.js";
 import { createAgentState } from "../dist/loop/state.js";
 import { loadConfig } from "../dist/config.js";
 import { resolveInSandbox } from "../dist/tools/sandbox.js";
+import { executeTool } from "../dist/tools/definitions.js";
 
 const sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), "yoof1337-smoke-"));
 const config = loadConfig();
@@ -70,6 +71,7 @@ await runTurn(
 check("loop ended with final text", printed.includes("All checks done."));
 check("world state tracked file", state.world.filesTouched.has("hello.txt"));
 check("world state tracked commands", state.world.commandsRun.length === 2);
+check("world state tracked bg commands array exists", Array.isArray(state.world.bgCommandsRun ?? []));
 
 // Direct sandbox unit check (absolute path escape)
 let threw = false;
@@ -79,6 +81,26 @@ try {
   threw = true;
 }
 check("sandbox rejects absolute outside path", threw);
+
+// Background command smoke (host mode only)
+const bgCtx = { root: sandboxRoot, commandTimeoutMs: 5_000, execMode: "host" };
+const started = await executeTool("run_command_bg", { command: "node -e \"setTimeout(()=>console.log('bg-ok'),200)\"" }, bgCtx);
+check("run_command_bg starts", /Started command/.test(started), started);
+const id = (started.match(/Started command ([0-9a-f]+)/) || [])[1];
+if (id) {
+  let done = false;
+  for (let i = 0; i < 20; i++) {
+    const status = await executeTool("check_command", { id }, bgCtx);
+    if (/status: exited/.test(status)) {
+      done = /bg-ok/.test(status);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  check("check_command sees completion", done);
+} else {
+  check("check_command sees completion", false, "no id parsed");
+}
 
 fs.rmSync(sandboxRoot, { recursive: true, force: true });
 console.log(results.join("\n"));

@@ -9,6 +9,8 @@ export interface WorldState {
   filesTouched: Set<string>;
   /** Commands executed via run_command. */
   commandsRun: string[];
+  /** Background commands started via run_command_bg. */
+  bgCommandsRun: string[];
   /** Key decisions/notes worth preserving across compactions. */
   notes: string[];
   /** Structured memory that survives compaction. */
@@ -19,6 +21,9 @@ export interface WorldState {
     nextSteps: string[];
     repoSnapshot: string;
     lastCompactedAt: string;
+  };
+  permissions: {
+    allowCommandPrefixes: string[];
   };
 }
 
@@ -39,6 +44,7 @@ export function createAgentState(systemPrompt: string): AgentState {
     world: {
       filesTouched: new Set(),
       commandsRun: [],
+      bgCommandsRun: [],
       notes: [],
       memory: {
         objective: "",
@@ -47,6 +53,9 @@ export function createAgentState(systemPrompt: string): AgentState {
         nextSteps: [],
         repoSnapshot: "",
         lastCompactedAt: "",
+      },
+      permissions: {
+        allowCommandPrefixes: [],
       },
     },
   };
@@ -71,6 +80,9 @@ export function worldStateSummary(world: WorldState): string {
   }
   if (world.commandsRun.length > 0) {
     parts.push(`Commands run:\n${world.commandsRun.map((c) => `- ${c}`).join("\n")}`);
+  }
+  if (world.bgCommandsRun.length > 0) {
+    parts.push(`Background commands:\n${world.bgCommandsRun.map((c) => `- ${c}`).join("\n")}`);
   }
   if (world.notes.length > 0) {
     parts.push(`Notes:\n${world.notes.map((n) => `- ${n}`).join("\n")}`);

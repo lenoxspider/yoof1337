@@ -93,10 +93,15 @@ export class TuiApp {
     };
   }
 
+  private lineQueue: string[] = [];
+
   async readLine(promptLabel = "you> "): Promise<string | null> {
     if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
     this.setStatus(color("enter to send • /help • ctrl+c to exit", ansi.dim));
     this.dirty = true;
+    if (this.lineQueue.length > 0) {
+      return Promise.resolve(this.lineQueue.shift()!);
+    }
     return new Promise<string | null>((resolve) => {
       const poll = () => {
         if (this.closed) return resolve(null);
@@ -192,6 +197,8 @@ export class TuiApp {
       if (resolve) {
         (this as any)._resolveLine = undefined;
         resolve(line);
+      } else if (line) {
+        this.lineQueue.push(line);
       }
       return;
     }

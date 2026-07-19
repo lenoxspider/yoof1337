@@ -13,6 +13,25 @@ export interface CompactionConfig {
   thresholdRatio: number;
   /** How many trailing messages to keep verbatim after compaction. */
   keepLastMessages: number;
+  /** Whether to snip zombie messages and stale markers before compacting. */
+  useHistorySnip: boolean;
+  /** Whether to merge consecutive messages to save framing tokens. */
+  useContextCollapse: boolean;
+}
+
+export interface PermissionRules {
+  alwaysAllow: string[];
+  alwaysDeny: string[];
+  alwaysAsk: string[];
+  allowedDomains: string[];
+}
+
+export interface McpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  transport?: "stdio" | "sse" | "ws" | "http" | "sdk";
+  url?: string; // for sse/ws/http
 }
 
 export interface AgentConfig {
@@ -21,6 +40,11 @@ export interface AgentConfig {
   compaction: CompactionConfig;
   maxToolIterationsPerTurn: number;
   commandTimeoutMs: number;
+  hooks: {
+    preToolUse: Record<string, string>;
+  };
+  permissions: PermissionRules;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 const DEFAULTS: AgentConfig = {
@@ -39,15 +63,25 @@ const DEFAULTS: AgentConfig = {
       contextWindow: 262_144,
     },
   },
-  compaction: { thresholdRatio: 0.75, keepLastMessages: 8 },
+  compaction: { thresholdRatio: 0.75, keepLastMessages: 8, useHistorySnip: true, useContextCollapse: true },
   maxToolIterationsPerTurn: 50,
   commandTimeoutMs: 120_000,
+  hooks: { preToolUse: {} },
+  permissions: {
+    alwaysAllow: ["read_file", "list_dir", "search_code", "grep_search", "web_search", "task_get", "task_list", "task_output", "mcp_list_resources", "mcp_read_resource"],
+    alwaysDeny: ["rm -rf /", "rm -rf *"],
+    alwaysAsk: [],
+    allowedDomains: ["github.com", "stackoverflow.com", "docs.python.org", "developer.mozilla.org"],
+  },
 };
 
 export function loadConfig(configPath?: string): AgentConfig {
   const candidates = configPath
     ? [configPath]
-    : [path.join(process.cwd(), "config.json")];
+    : [
+        path.join(process.cwd(), "yoof1337.json"),
+        path.join(process.cwd(), "config.json")
+      ];
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -57,6 +91,8 @@ export function loadConfig(configPath?: string): AgentConfig {
         ...raw,
         providers: { ...DEFAULTS.providers, ...(raw.providers ?? {}) },
         compaction: { ...DEFAULTS.compaction, ...(raw.compaction ?? {}) },
+        hooks: { ...DEFAULTS.hooks, ...(raw.hooks ?? {}) },
+        permissions: { ...DEFAULTS.permissions, ...(raw.permissions ?? {}) },
       };
     }
   }
