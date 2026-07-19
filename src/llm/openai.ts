@@ -17,12 +17,14 @@ export class OpenAiCompatibleClient implements LlmClient {
   readonly contextWindow: number;
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
+  private readonly providerOpts: ProviderConfig;
 
   constructor(provider: ProviderConfig, opts: { requireApiKey: boolean }) {
     this.model = provider.model;
     this.contextWindow = provider.contextWindow;
     this.baseUrl = provider.baseUrl.replace(/\/+$/, "");
     this.apiKey = provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined;
+    this.providerOpts = provider;
     if (opts.requireApiKey && provider.apiKeyEnv && !this.apiKey) {
       throw new Error(
         `Missing API key: set the ${provider.apiKeyEnv} environment variable (never commit keys to source control).`
@@ -35,6 +37,11 @@ export class OpenAiCompatibleClient implements LlmClient {
       model: this.model,
       messages: messages.map(toWireMessage),
     };
+    if (this.providerOpts.temperature !== undefined) body.temperature = this.providerOpts.temperature;
+    if (this.providerOpts.top_p !== undefined) body.top_p = this.providerOpts.top_p;
+    if (this.providerOpts.top_k !== undefined) body.top_k = this.providerOpts.top_k;
+    if (this.providerOpts.min_p !== undefined) body.min_p = this.providerOpts.min_p;
+    if (this.providerOpts.presence_penalty !== undefined) body.presence_penalty = this.providerOpts.presence_penalty;
     if (tools.length > 0) {
       body.tools = tools.map((t) => ({
         type: "function",

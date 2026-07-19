@@ -6,6 +6,11 @@ export interface ProviderConfig {
   model: string;
   apiKeyEnv: string | null;
   contextWindow: number;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  presence_penalty?: number;
 }
 
 export interface CompactionConfig {

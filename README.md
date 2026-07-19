@@ -1,4 +1,4 @@
-﻿# yoof1337
+# yoof1337
 
 Terminal-based coding agent: an LLM in a tool-use loop that can read/write files, run shell commands, and search code inside a sandboxed working directory, with human-in-the-loop guardrails for anything that mutates state.
 
@@ -35,6 +35,36 @@ npm run dev
 
 In-session commands: `/compact` (summarize + shrink history), `/state` (world-state tracker + token estimate), `/help`, `/exit`.
 
+## Features
+
+- **Prompt Queue:** In-session interactive prompt queueing allowing for rapid commands while agent is processing.
+- **Web Tools:** Integrated `web_search` and `web_fetch` capabilities.
+- **Autonomous Subagents:** Spawn isolated concurrent subagents on isolated git worktrees via the Job Board Coordinator. Subagents have distinct short-term memories preventing context bloat.
+- **Intel on Demand:** Drop markdown context into `.yoof1337-mem` for on-demand knowledge injection (`intel_day`).
+- **Persistent Tasks:** Tasks and subagent states are backed to `.yoof1337-tasks.json` allowing for session resumes and dependency graphing.
+
+## Configuration
+
+The agent respects a `config.json` or `yoof1337.json` file in the working directory. Here you can change default settings and define LLM generation properties.
+
+```json
+{
+  "provider": "llamacpp",
+  "providers": {
+    "llamacpp": {
+      "baseUrl": "http://localhost:8080/v1",
+      "model": "qwen3.5-35b-a3b",
+      "contextWindow": 131072,
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "presence_penalty": 0
+    }
+  }
+}
+```
+
 ## Context compaction
 
 When the estimated history size passes `compaction.thresholdRatio` (default 0.75) of the provider's context window, the agent auto-compacts: the LLM summarizes the history (preserving decisions, file states, unresolved tasks), and the log is rebuilt as `[system prompt, original task verbatim, summary, last N messages verbatim]`. The system prompt and original task are never summarized. A separate world-state tracker (files touched, commands run) lives outside the message log, so compaction is never the only record of what happened.
@@ -58,7 +88,7 @@ docker run -it --rm -v "$PWD:/work" -w /work node:22 bash -c "npm ci && npm run 
 Serve the GGUF model with llama.cpp's OpenAI-compatible server on the GPU box:
 
 ```sh
-llama-server -m qwen3.5-35b-a3b-q8_0.gguf --port 8080 -c 262144 --jinja
+llama-server -m qwen3.5-35b-a3b-q8_0.gguf --port 8080 -c 131072 --jinja
 ```
 
 Then either set `"provider": "llamacpp"` in `config.json` or pass `--provider llamacpp`, and point `providers.llamacpp.baseUrl` at the instance. No code changes.
@@ -75,9 +105,10 @@ Runs the compiled agent loop offline against a scripted fake LLM client -- verif
 
 ```
 src/
-├── llm/          client.ts (provider-agnostic interface), openai.ts, llamacpp.ts, factory.ts
+├── llm/          client.ts (provider-agnostic interface), openai.ts, factory.ts
 ├── tools/        definitions.ts (schemas + registry), one file per tool, sandbox.ts
+├── tasks/        coordinator.ts, taskStore.ts, teamManager.ts, workerProcess.ts
 ├── loop/         agentLoop.ts, compaction.ts, state.ts (world-state tracker)
 ├── permissions/  guardrails.ts
-└── cli/          index.ts (entry point / REPL)
+└── cli/          index.ts (entry point / REPL), inkUi.tsx, tui.ts
 ```
