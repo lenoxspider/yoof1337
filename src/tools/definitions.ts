@@ -1029,6 +1029,120 @@ registry.register({
   },
 });
 
+// ── Register Decision Ledger tool ───────────────────────────────────────────
+
+registry.register({
+  mutating: false,
+  category: "PLANNING & WORKFLOW",
+  definition: {
+    name: "note_decision",
+    description:
+      "Record a key decision, architectural choice, or important finding that must survive context compaction. Use this whenever you make a non-obvious choice the user confirmed, discover a constraint, or settle on an approach. These notes persist across compaction boundaries.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        decision: {
+          type: "string",
+          description: "A concise statement of the decision or finding (1-2 sentences).",
+        },
+      },
+      required: ["decision"],
+    },
+  },
+  execute: async (input) => {
+    const decision = String(input.decision ?? "").trim();
+    if (!decision) return "Error: decision text cannot be empty.";
+    return `Decision noted: "${decision}"`;
+  },
+});
+
+// ── Tier assignments ──────────────────────────────────────────────────────────
+
+const CORE_TOOLS = new Set([
+  "read_file",
+  "read_file_excerpt",
+  "write_file",
+  "edit_file",
+  "list_directory",
+  "run_command",
+  "search_code",
+  "glob_files",
+  "git_status",
+  "git_diff",
+  "git_commit",
+  "git_add",
+  "git_log",
+  "note_decision",
+  "web_search",
+  "request_tools",
+]);
+
+for (const tool of registry.getAll()) {
+  if (CORE_TOOLS.has(tool.definition.name)) {
+    registry.setTier(tool.definition.name, "core");
+  }
+}
+
+// ── request_tools meta-tool (always core) ─────────────────────────────────────
+
+registry.register({
+  mutating: false,
+  category: "META",
+  definition: {
+    name: "request_tools",
+    description: "Request additional tools to be made available. Use this when you need capabilities beyond the currently visible tools (e.g. git operations, GitHub CLI, web fetching, background commands, task management, MCP, notebooks). Call with a category or tool name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        category: {
+          type: "string",
+          description: "Category or tool names to activate. Options: 'git' (git_checkout, gh_* tools), 'web' (web_fetch), 'tasks' (task_create, task_get, task_update, task_stop, task_output, agent_run, team_*, send_message, workspace_*), 'advanced_file' (apply_patch, edit_notebook, run_command_bg, check_command, kill_command), 'mcp' (mcp_list_resources, mcp_read_resource), 'planning' (plan_create, walkthrough_generate), 'all' (activate everything).",
+        },
+      },
+      required: ["category"],
+    },
+  },
+  execute: async (input) => {
+    const category = String(input.category ?? "").toLowerCase().trim();
+    const activations: Record<string, string[]> = {
+      git: ["git_checkout", "gh_auth_status", "gh_pr_view", "gh_pr_diff", "gh_issue_view", "gh_repo_view", "gh_pr_create", "gh_pr_comment", "gh_pr_checkout"],
+      web: ["web_fetch"],
+      tasks: ["task_create", "task_get", "task_update", "task_list", "task_stop", "task_output", "agent_run", "workspace_merge", "workspace_delete", "team_create", "team_delete", "send_message"],
+      advanced_file: ["apply_patch", "edit_notebook", "run_command_bg", "check_command", "kill_command", "search_tools"],
+      mcp: ["mcp_list_resources", "mcp_read_resource"],
+      planning: ["plan_create", "walkthrough_generate"],
+    };
+
+    if (category === "all") {
+      for (const tool of registry.getAll()) {
+        registry.setTier(tool.definition.name, "core");
+      }
+      return `All ${registry.getAll().length} tools are now active.`;
+    }
+
+    const toolNames = activations[category];
+    if (!toolNames) {
+      // Try activating by exact tool name
+      const tool = registry.get(category);
+      if (tool) {
+        registry.setTier(category, "core");
+        return `Activated tool: ${category}`;
+      }
+      return `Unknown category "${category}". Available: ${Object.keys(activations).join(", ")}, all, or an exact tool name.`;
+    }
+
+    const activated: string[] = [];
+    for (const name of toolNames) {
+      if (registry.get(name)) {
+        registry.setTier(name, "core");
+        activated.push(name);
+      }
+    }
+    return `Activated ${activated.length} tools: ${activated.join(", ")}`;
+  },
+});
+registry.setTier("request_tools", "core");
+
 export function toolDefinitions(): ToolDefinition[] {
   return registry.getDefinitions();
 }

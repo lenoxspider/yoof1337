@@ -6,6 +6,7 @@ import type {
   ToolDefinition,
 } from "./client.js";
 import type { ProviderConfig } from "../config.js";
+import { toStrictSchema } from "./schemaStrict.js";
 
 /**
  * Adapter for any OpenAI-compatible /v1/chat/completions endpoint.
@@ -43,10 +44,18 @@ export class OpenAiCompatibleClient implements LlmClient {
     if (this.providerOpts.min_p !== undefined) body.min_p = this.providerOpts.min_p;
     if (this.providerOpts.presence_penalty !== undefined) body.presence_penalty = this.providerOpts.presence_penalty;
     if (tools.length > 0) {
+      const useStrict = this.providerOpts.strictToolSchemas ?? false;
       body.tools = tools.map((t) => ({
         type: "function",
-        function: { name: t.name, description: t.description, parameters: t.inputSchema },
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: useStrict ? toStrictSchema(t.inputSchema) : t.inputSchema,
+          ...(useStrict ? { strict: true } : {}),
+        },
       }));
+      const toolChoice = this.providerOpts.toolChoice ?? "auto";
+      body.tool_choice = toolChoice;
     }
 
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -119,6 +128,7 @@ function safeParseJson(raw: string): Record<string, unknown> {
     const parsed = JSON.parse(raw);
     return typeof parsed === "object" && parsed !== null ? parsed : {};
   } catch {
+    console.warn(`[llm] Failed to parse tool arguments JSON: ${raw.slice(0, 200)}`);
     return {};
   }
 }

@@ -11,6 +11,10 @@ export interface ProviderConfig {
   top_k?: number;
   min_p?: number;
   presence_penalty?: number;
+  /** Enable strict JSON schema enforcement on tool call arguments (llama.cpp grammar decoding). */
+  strictToolSchemas?: boolean;
+  /** tool_choice value: "auto" (default), "required", or "none". */
+  toolChoice?: "auto" | "required" | "none";
 }
 
 export interface CompactionConfig {
@@ -65,6 +69,8 @@ const DEFAULTS: AgentConfig = {
       top_k: 20,
       min_p: 0,
       presence_penalty: 0,
+      strictToolSchemas: true,
+      toolChoice: "auto",
     },
   },
   compaction: { thresholdRatio: 0.75, keepLastMessages: 8, useHistorySnip: true, useContextCollapse: true },

@@ -12,6 +12,31 @@ import { renderMarkdownToPlain } from "../cli/markdown.js";
 
 type Questioner = { question: (prompt: string) => Promise<string>; isTui?: boolean };
 
+interface LoopDetectionState {
+  consecutiveFailures: number;
+  lastCallSignature: string | null;
+  repeatCount: number;
+}
+
+const LOOP_FAILURE_THRESHOLD = 3;
+const LOOP_REPEAT_THRESHOLD = 3;
+
+function getCallSignature(name: string, input: Record<string, unknown>): string {
+  return `${name}:${JSON.stringify(input)}`;
+}
+
+function isFailureResult(result: string): boolean {
+  const lower = result.toLowerCase();
+  return (
+    lower.startsWith("error:") ||
+    lower.startsWith("tool call denied") ||
+    lower.includes("sandbox violation") ||
+    lower.includes("command failed") ||
+    lower.includes("no such file") ||
+    lower.includes("permission denied")
+  );
+}
+
 export interface LoopIO {
   /** Assistant-facing output (final text, tool activity). */
   print: (text: string) => void;
@@ -49,6 +74,12 @@ export async function runTurn(
     await io.sessionLogger.logSync({ type: "user", content: userInput, originalTask: state.originalTask });
   }
 
+  const loopState: LoopDetectionState = {
+    consecutiveFailures: 0,
+    lastCallSignature: null,
+    repeatCount: 0,
+  };
+
   for (let iteration = 0; iteration < config.maxToolIterationsPerTurn; iteration++) {
     if (io.abortSignal?.aborted) {
       io.print(color("Canceled.", ansi.yellow));
@@ -61,7 +92,7 @@ export async function runTurn(
 
     let response;
     try {
-      response = await client.chat(state.messages, registry.getDefinitions());
+      response = await client.chat(state.messages, registry.getActiveDefinitions());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       io.print(color(`LLM error: ${msg}`, ansi.red));
@@ -137,8 +168,42 @@ export async function runTurn(
       state.messages.push({ role: "tool", toolCallId: call.id, content: result });
       if (io.sessionLogger) {
         io.sessionLogger.logAsync({ type: "tool", toolCallId: call.id, content: result });
-        // After a tool runs, world state might have changed, so we log progress inline
         io.sessionLogger.logAsync({ type: "progress", world: state.world });
+      }
+
+      // Loop detection: track repeated calls and consecutive failures
+      const callSig = getCallSignature(call.name, call.input);
+      if (isFailureResult(result)) {
+        loopState.consecutiveFailures++;
+      } else {
+        loopState.consecutiveFailures = 0;
+      }
+
+      if (callSig === loopState.lastCallSignature) {
+        loopState.repeatCount++;
+      } else {
+        loopState.lastCallSignature = callSig;
+        loopState.repeatCount = 1;
+      }
+
+      if (loopState.consecutiveFailures >= LOOP_FAILURE_THRESHOLD) {
+        io.print(color(
+          `Paused: ${loopState.consecutiveFailures} consecutive tool failures detected. The model may be stuck.`,
+          ansi.yellow
+        ));
+        state.messages.push({ role: "user", content: "[system] You have failed the same operation multiple times in a row. Stop and explain what is going wrong, then try a different approach." });
+        loopState.consecutiveFailures = 0;
+        break;
+      }
+      if (loopState.repeatCount >= LOOP_REPEAT_THRESHOLD) {
+        io.print(color(
+          `Paused: identical tool call repeated ${loopState.repeatCount} times. The model appears to be looping.`,
+          ansi.yellow
+        ));
+        state.messages.push({ role: "user", content: "[system] You are repeating the same tool call with the same arguments. This is unproductive. Stop and try a fundamentally different approach or explain why you are stuck." });
+        loopState.repeatCount = 0;
+        loopState.lastCallSignature = null;
+        break;
       }
     }
   }
@@ -162,6 +227,12 @@ function trackWorldState(state: AgentState, toolName: string, input: Record<stri
   }
   if (toolName === "run_command_bg" && typeof input.command === "string") {
     state.world.bgCommandsRun.push(input.command);
+  }
+  if (toolName === "note_decision" && typeof input.decision === "string") {
+    const decision = input.decision.trim();
+    if (decision && !state.world.memory.decisions.includes(decision)) {
+      state.world.memory.decisions.push(decision);
+    }
   }
 }
 

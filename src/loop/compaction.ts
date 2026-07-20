@@ -143,18 +143,33 @@ export async function compact(
 
   if (parsed) {
     state.world.memory.objective = parsed.objective ?? state.world.memory.objective;
-    state.world.memory.decisions = parsed.decisions ?? state.world.memory.decisions;
+    // Merge decisions: keep existing ledger entries and append new ones from the summary
+    if (Array.isArray(parsed.decisions)) {
+      const existing = new Set(state.world.memory.decisions);
+      for (const d of parsed.decisions) {
+        if (typeof d === "string" && d.trim() && !existing.has(d.trim())) {
+          state.world.memory.decisions.push(d.trim());
+          existing.add(d.trim());
+        }
+      }
+    }
     state.world.memory.openQuestions = parsed.open_questions ?? state.world.memory.openQuestions;
     state.world.memory.nextSteps = parsed.next_steps ?? state.world.memory.nextSteps;
     state.world.memory.lastCompactedAt = new Date().toISOString();
   } else {
     // Keep the raw summary as a note if it wasn't valid JSON.
+    // Decisions ledger is preserved regardless since it lives in state.world.memory.
     state.world.notes.push(`Compaction summary (raw): ${summary.slice(0, 5000)}`);
     state.world.memory.lastCompactedAt = new Date().toISOString();
   }
 
   const rebuilt: ChatMessage[] = [{ role: "system", content: state.systemPrompt }];
   
+  // Cap the decisions ledger to the most recent 50 entries to avoid unbounded growth
+  if (state.world.memory.decisions.length > 50) {
+    state.world.memory.decisions = state.world.memory.decisions.slice(-50);
+  }
+
   let summaryContent = `[Context was compacted. Summary of the conversation so far:]\n${summary}\n\n[World state:]\n${worldStateSummary(state.world)}`;
   if (state.originalTask) {
     summaryContent = `Original task (verbatim):\n${state.originalTask}\n\n` + summaryContent;
