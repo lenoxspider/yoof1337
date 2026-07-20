@@ -42,6 +42,8 @@ type StoreSnapshot = {
   lastFoldedOutput: string | null;
   fullOutputModal: boolean;
   fullTranscriptModal: boolean;
+  /** Live activity indicator: null when idle, else the current phase + start time + detail. */
+  busy: null | { activity: string; startedAt: number; detail?: string };
 };
 
 class InkStore {
@@ -68,6 +70,7 @@ class InkStore {
       lastFoldedOutput: null,
       fullOutputModal: false,
       fullTranscriptModal: false,
+      busy: null,
     };
   }
 
@@ -93,6 +96,16 @@ class InkStore {
 
   setStatus(status: string): void {
     this.snapshot = { ...this.snapshot, status };
+    this.emit();
+  }
+
+  /**
+   * Set (or clear, with null) the live "busy" indicator that drives the
+   * animated spinner + elapsed timer. `startedAt` anchors the elapsed clock;
+   * pass it once at turn start and keep it stable so the timer counts up.
+   */
+  setBusy(busy: null | { activity: string; startedAt: number; detail?: string }): void {
+    this.snapshot = { ...this.snapshot, busy };
     this.emit();
   }
 
@@ -315,6 +328,7 @@ export type InkUi = {
   stop: () => void;
   println: (text: string) => void;
   setStatus: (text: string) => void;
+  setBusy: (busy: null | { activity: string; startedAt: number; detail?: string }) => void;
   setStatusline: (text: string) => void;
   setTools: (lines: string[]) => void;
   setLastFoldedOutput?: (output: string | null) => void;
@@ -345,6 +359,7 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
     },
     println: (t: string) => store.println(t),
     setStatus: (t: string) => store.setStatus(t),
+    setBusy: (b) => store.setBusy(b),
     setStatusline: (t: string) => store.setStatusline(t),
     setTools: (t: string[]) => store.setTools(t),
     setLastFoldedOutput: (t: string | null) => store.setLastFoldedOutput(t),
@@ -580,10 +595,49 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
         />
       </Box>
       <Box>
-        <Text color="gray">{snap.status}</Text>
+        {snap.busy ? (
+          <BusyLine busy={snap.busy} />
+        ) : (
+          <Text color="gray">{snap.status}</Text>
+        )}
       </Box>
       {!snap.modal ? <InkKeys onExit={() => onExit()} /> : null}
     </Box>
+  );
+}
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/**
+ * Animated "working" line: braille spinner + current activity + live elapsed
+ * timer, re-rendering ~10x/sec while `busy` is set. Mirrors the Claude Code /
+ * Codex "✻ Brewed for 4m 52s" affordance.
+ */
+function BusyLine({ busy }: { busy: { activity: string; startedAt: number; detail?: string } }): React.JSX.Element {
+  const [frame, setFrame] = useState(0);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const spin = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 100);
+    const clock = setInterval(() => setTick((t) => t + 1), 250);
+    return () => {
+      clearInterval(spin);
+      clearInterval(clock);
+    };
+  }, []);
+
+  const elapsed = Date.now() - busy.startedAt;
+  const secs = Math.floor(elapsed / 1000);
+  const timeStr = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+
+  return (
+    <Text color="cyan">
+      {SPINNER_FRAMES[frame]} <Text color="magenta">{busy.activity}</Text>
+      <Text color="gray">
+        {" "}({timeStr}
+        {busy.detail ? ` · ${busy.detail}` : ""})
+      </Text>
+    </Text>
   );
 }
 

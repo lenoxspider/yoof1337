@@ -8,12 +8,15 @@ import { createClient } from "../llm/factory.js";
 import { estimateTokens } from "../llm/client.js";
 import { createAgentState, worldStateSummary, AgentState } from "../loop/state.js";
 import { runTurn } from "../loop/agentLoop.js";
+import type { TurnProgress } from "../loop/agentLoop.js";
 import { compact } from "../loop/compaction.js";
 import type { SandboxContext } from "../tools/sandbox.js";
 import { ansi, color } from "./ui.js";
 import { TuiApp } from "./tui.js";
 import { createInkUi } from "./inkUi.js";
 import { renderMarkdownToPlain } from "./markdown.js";
+import { progressDetail, turnSummary, formatTokens } from "./format.js";
+
 import { hintForToolResult } from "./hints.js";
 import { execa } from "execa";
 import { toolDefinitions } from "../tools/definitions.js";
@@ -414,6 +417,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     setStatusline?: (t: string) => void;
     setStatus?: (t: string) => void;
     setTools?: (lines: string[]) => void;
+    setBusy?: (busy: null | { activity: string; startedAt: number; detail?: string }) => void;
     setLastFoldedOutput?: (output: string | null) => void;
     readLine: (promptLabel?: string) => Promise<string | null>;
     createQuestioner: () => any;
@@ -430,13 +434,39 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   app.start();
   const questioner = app.createQuestioner();
   const permissions = { yolo: args.yolo, allowCommandPrefixes: state.world.permissions.allowCommandPrefixes };
+  let turnStartedAt = Date.now();
+  // Most recent real prompt-token count reported by the server (true context fill).
+  // 0 until the first usage report; the statusline falls back to the estimate.
+  let lastContextTokens = 0;
   const io = {
     print: (t: string) => app.println(t),
     rl: questioner,
     format: renderMarkdownToPlain,
     sessionLogger: logger,
     formatToolResult: (toolName: string, result: string) => "", // Handled in onToolEnd instead
+    onTurnStart: () => {
+      turnStartedAt = Date.now();
+      app.setBusy?.({ activity: "Thinking", startedAt: turnStartedAt });
+    },
+    onLlmStart: (activity: string) => {
+      app.setBusy?.({ activity: activity === "thinking" ? "Thinking" : activity, startedAt: turnStartedAt });
+    },
+    onLlmEnd: (p: TurnProgress) => {
+      if (p.hasUsage && p.contextTokens > 0) {
+        lastContextTokens = p.contextTokens;
+        void refreshStatusline();
+      }
+      app.setBusy?.({ activity: "Working", startedAt: turnStartedAt, detail: progressDetail(p) });
+    },
+    onProgress: (activity: string, p: TurnProgress) => {
+      app.setBusy?.({ activity, startedAt: turnStartedAt, detail: progressDetail(p) });
+    },
+    onTurnEnd: (p: TurnProgress) => {
+      app.setBusy?.(null);
+      app.println(color(`✻ ${turnSummary(p)}`, ansi.dim));
+    },
     onToolStart: (name: string) => {
+      app.setBusy?.({ activity: name, startedAt: turnStartedAt });
       toolPanel.push(`> ${name}`);
       app.setTools?.(toolPanel);
     },
@@ -476,17 +506,27 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const toolPanel: string[] = [];
 
   async function refreshStatusline(): Promise<void> {
-    const tokenEstimate = estimateTokens(state.messages);
     const git = await getGitStatusLine(sandbox.root);
     const cwdStr = sandbox.root.split(path.sep).pop() || sandbox.root;
     const exec = sandbox.execMode === "docker" ? "docker" : "host";
     const approval = args.yolo ? "yolo" : "prompt";
-    
+
+    // Prefer the server's real prompt-token count from the last LLM call (true
+    // context fill); fall back to the char/4 heuristic before any call reports usage.
+    const ctxWindow = client.contextWindow;
+    let tokStr: string;
+    if (lastContextTokens > 0) {
+      const pct = ctxWindow > 0 ? Math.round((lastContextTokens / ctxWindow) * 100) : 0;
+      tokStr = `🪙 tok:${formatTokens(lastContextTokens)}/${formatTokens(ctxWindow)} (${pct}%)`;
+    } else {
+      tokStr = `🪙 tok:~${formatTokens(estimateTokens(state.messages))}`;
+    }
+
     const parts = [
       `💻 ${cwdStr}`,
       `⚡ exec:${exec}`,
       `✅ apprv:${approval}`,
-      `🪙 tok:~${tokenEstimate}`
+      tokStr,
     ];
     if (git) {
       parts.push(`🌿 git:${git}`);
