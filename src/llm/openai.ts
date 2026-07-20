@@ -81,6 +81,11 @@ export class OpenAiCompatibleClient implements LlmClient {
           }>;
         };
       }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      };
     };
     const message = data.choices?.[0]?.message;
     if (!message) throw new Error(`LLM response had no choices: ${JSON.stringify(data).slice(0, 500)}`);
@@ -98,7 +103,17 @@ export class OpenAiCompatibleClient implements LlmClient {
       if (inferred) toolCalls = [{ id: "call_0", name: inferred.name, input: inferred.input }];
     }
 
-    return { text: message.content ?? null, toolCalls };
+    const usage = data.usage
+      ? {
+          promptTokens: data.usage.prompt_tokens ?? 0,
+          completionTokens: data.usage.completion_tokens ?? 0,
+          totalTokens:
+            data.usage.total_tokens ??
+            (data.usage.prompt_tokens ?? 0) + (data.usage.completion_tokens ?? 0),
+        }
+      : undefined;
+
+    return { text: message.content ?? null, toolCalls, usage };
   }
 }
 

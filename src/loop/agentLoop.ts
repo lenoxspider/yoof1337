@@ -37,6 +37,24 @@ function isFailureResult(result: string): boolean {
   );
 }
 
+/** Running tallies for a single turn, surfaced live and in the closing summary. */
+export interface TurnProgress {
+  /** ms since the turn started. */
+  elapsedMs: number;
+  /** Number of LLM round-trips so far. */
+  llmCalls: number;
+  /** Number of tool calls executed (approved or denied) so far. */
+  toolCalls: number;
+  /** Cumulative prompt/input tokens reported by the server. */
+  promptTokens: number;
+  /** Cumulative completion/output tokens reported by the server. */
+  completionTokens: number;
+  /** Prompt tokens from the most recent LLM call — the true context-window fill. */
+  contextTokens: number;
+  /** True once at least one server usage report has been seen. */
+  hasUsage: boolean;
+}
+
 export interface LoopIO {
   /** Assistant-facing output (final text, tool activity). */
   print: (text: string) => void;
@@ -52,6 +70,16 @@ export interface LoopIO {
   abortSignal?: AbortSignal;
   /** Session logger for append-only persistence. */
   sessionLogger?: import("../sessions/logger.js").SessionLogger;
+  /** Called once when the turn begins. */
+  onTurnStart?: () => void;
+  /** Called when an LLM request is dispatched, with a short activity label. */
+  onLlmStart?: (activity: string) => void;
+  /** Called when an LLM request returns, with the latest running tallies. */
+  onLlmEnd?: (progress: TurnProgress) => void;
+  /** Called with a phase label + running tallies whenever activity changes. */
+  onProgress?: (activity: string, progress: TurnProgress) => void;
+  /** Called once when the turn ends (final text, cap, cancel, or error). */
+  onTurnEnd?: (progress: TurnProgress) => void;
 }
 
 /**
@@ -80,22 +108,48 @@ export async function runTurn(
     repeatCount: 0,
   };
 
+  const turnStart = Date.now();
+  const tallies = { llmCalls: 0, toolCalls: 0, promptTokens: 0, completionTokens: 0, contextTokens: 0, hasUsage: false };
+  const progress = (): TurnProgress => ({
+    elapsedMs: Date.now() - turnStart,
+    llmCalls: tallies.llmCalls,
+    toolCalls: tallies.toolCalls,
+    promptTokens: tallies.promptTokens,
+    completionTokens: tallies.completionTokens,
+    contextTokens: tallies.contextTokens,
+    hasUsage: tallies.hasUsage,
+  });
+  io.onTurnStart?.();
+
   for (let iteration = 0; iteration < config.maxToolIterationsPerTurn; iteration++) {
     if (io.abortSignal?.aborted) {
       io.print(color("Canceled.", ansi.yellow));
+      io.onTurnEnd?.(progress());
       return;
     }
     if (shouldCompact(state, client, config.compaction)) {
       io.print(color("compacting context...", ansi.dim));
+      io.onProgress?.("compacting context", progress());
       await compact(state, client, config.compaction, { cwdForRepoSnapshot: sandbox.root, sessionLogger: io.sessionLogger });
     }
 
     let response;
     try {
+      io.onLlmStart?.(iteration === 0 ? "thinking" : "thinking");
       response = await client.chat(state.messages, registry.getActiveDefinitions());
+      tallies.llmCalls++;
+      if (response.usage) {
+        tallies.hasUsage = true;
+        tallies.promptTokens += response.usage.promptTokens;
+        tallies.completionTokens += response.usage.completionTokens;
+        // Context fill = prompt tokens of the most recent call (whole history re-sent each round).
+        tallies.contextTokens = response.usage.promptTokens;
+      }
+      io.onLlmEnd?.(progress());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       io.print(color(`LLM error: ${msg}`, ansi.red));
+      io.onTurnEnd?.(progress());
       return;
     }
 
@@ -105,6 +159,7 @@ export async function runTurn(
       if (io.sessionLogger) io.sessionLogger.logAsync({ type: "assistant", content: response.text ?? "" });
       const out = response.text ?? "(no response text)";
       io.print(io.format ? io.format(out) : out);
+      io.onTurnEnd?.(progress());
       return;
     }
 
@@ -123,12 +178,15 @@ export async function runTurn(
     for (const call of response.toolCalls) {
       if (io.abortSignal?.aborted) {
         io.print(color("Canceled.", ansi.yellow));
+        io.onTurnEnd?.(progress());
         return;
       }
+      tallies.toolCalls++;
       io.print(
         `${color("tool", ansi.gray)} ${color(call.name, ansi.cyan)} ${color(truncateJson(call.input, 180), ansi.dim)}`
       );
       io.onToolStart?.(call.name, call.input);
+      tallies.toolCalls++;
       const currentPermissions: PermissionOptions = {
         ...permissions,
         hooks: config.hooks?.preToolUse,
@@ -216,6 +274,7 @@ export async function runTurn(
       ansi.yellow
     )
   );
+  io.onTurnEnd?.(progress());
 }
 
 function trackWorldState(state: AgentState, toolName: string, input: Record<string, unknown>): void {
