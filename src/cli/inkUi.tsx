@@ -605,12 +605,16 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
 
       <Box flexDirection="row">
         <Text bold>{snap.promptLabel}</Text>
-        <TextInput
-          value={snap.input}
-          onChange={(v) => store.setInput(v)}
-          onSubmit={() => store.submitInput()}
-          focus={!snap.modal}
-        />
+        {!snap.modal ? (
+          <TextInput
+            value={snap.input}
+            onChange={(v) => store.setInput(v)}
+            onSubmit={() => store.submitInput()}
+            focus={true}
+          />
+        ) : (
+          <Text color="gray">{snap.input || "(waiting for permission...)"}</Text>
+        )}
       </Box>
       <Box>
         {snap.busy ? (
