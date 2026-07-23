@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -100,11 +101,14 @@ const DEFAULTS: AgentConfig = {
 };
 
 export function loadConfig(configPath?: string): AgentConfig {
+  const homeDir = os.homedir();
   const candidates = configPath
     ? [configPath]
     : [
         path.join(process.cwd(), "yoof1337.json"),
-        path.join(process.cwd(), "config.json")
+        path.join(process.cwd(), "config.json"),
+        path.join(homeDir, ".yoof1337.json"),
+        path.join(homeDir, "yoof1337.json")
       ];
 
   for (const candidate of candidates) {
