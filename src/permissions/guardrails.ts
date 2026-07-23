@@ -9,6 +9,8 @@ const ajv = new (Ajv as any)();
 export interface PermissionOptions {
   /** Explicit opt-in: auto-approve everything, including mutating tools. Off by default. */
   yolo: boolean;
+  /** Matches Codex semantics: untrusted | on-request | never */
+  approvalPolicy?: "untrusted" | "on-request" | "never";
   hooks?: Record<string, string>;
   rules?: {
     alwaysAllow: string[];
@@ -75,7 +77,8 @@ export async function requestPermission(
   }
 
   // Stage 3: Permission Rules
-  if (opts.yolo) return { approved: true, input: finalInput };
+  const policy = opts.approvalPolicy ?? (opts.yolo ? "never" : "untrusted");
+  if (policy === "never") return { approved: true, input: finalInput };
   
   if (opts.rules) {
     if (opts.rules.alwaysDeny.includes(toolName)) {
@@ -103,6 +106,28 @@ export async function requestPermission(
     }
     
     if (isAllowed) return { approved: true, input: finalInput };
+  }
+
+  // Stage 3.5: Policy heuristics (Codex-like)
+  if (policy === "on-request") {
+    // In this project, the model cannot explicitly "request" approval, so we interpret
+    // on-request as: auto-approve sandboxed file mutations, but still gate shell commands
+    // unless they match known-safe prefixes.
+    if (toolName === "write_file" || toolName === "apply_patch") {
+      return { approved: true, input: finalInput };
+    }
+    if (isCommandTool(toolName) && typeof finalInput.command === "string") {
+      const prefix = commandSimilarityPrefix(finalInput.command);
+      if (prefix && isTrustedCommandPrefix(prefix)) return { approved: true, input: finalInput };
+    }
+  }
+
+  if (policy === "untrusted") {
+    // In untrusted mode, auto-approve only a small set of known read-only command prefixes.
+    if (isCommandTool(toolName) && typeof finalInput.command === "string") {
+      const prefix = commandSimilarityPrefix(finalInput.command);
+      if (prefix && isTrustedCommandPrefix(prefix)) return { approved: true, input: finalInput };
+    }
   }
 
   // Stage 4: Interactive Prompt
@@ -184,6 +209,25 @@ function commandSimilarityPrefix(command: string): string | null {
   const multi = new Set(["git", "npm", "pnpm", "yarn", "cargo", "pip", "pip3", "python", "python3", "node"]);
   if (multi.has(t0) && tokens.length >= 2) return `${t0} ${tokens[1].toLowerCase()}`;
   return t0;
+}
+
+function isTrustedCommandPrefix(prefix: string): boolean {
+  // Intentionally small and conservative: should be read-only in practice.
+  const trusted = new Set([
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+    "git rev-parse",
+    "rg",
+    "cat",
+    "ls",
+    "pwd",
+    "whoami",
+    "node --version",
+    "npm view",
+  ]);
+  return trusted.has(prefix);
 }
 
 function tokenize(s: string): string[] {

@@ -24,14 +24,16 @@ OPENAI_API_KEY=sk-...
 ## Run
 
 ```sh
-node dist/cli/index.js [--dir <sandbox-path>] [--provider openai|llamacpp] [--yolo]
+node dist/cli/index.js [--dir <sandbox-path>] [--provider openai|llamacpp] [-a untrusted|on-request|never] [--yolo] [--tui]
 # or during development:
 npm run dev
 ```
 
 - `--dir` -- the working-directory sandbox. All file operations and commands are scoped here; paths that resolve outside it are rejected.
 - `--provider` -- which block of `config.json` to use. `openai` (gpt-4o-mini, testing phase) or `llamacpp` (self-hosted Qwen3.5-35B-A3B via llama.cpp's OpenAI-compatible server). Swapping providers is config only -- base URL + model name -- thanks to the adapter layer in `src/llm/`.
+- `-a, --ask-for-approval` -- approval policy for mutating tool calls: `on-request` (default), `untrusted`, `never`.
 - `--yolo` -- explicit opt-in to auto-approve every tool call, including `write_file` and `run_command`. Off by default; without it, each mutating call shows you exactly what will run/change and asks for confirmation. `read_file`, `list_directory`, and `search_code` are always auto-approved.
+- `--tui` -- opt in to the interactive Ink TUI (panels / folding). By default the agent runs in a plain line-based REPL for maximum terminal compatibility.
 
 In-session commands: `/compact` (summarize + shrink history), `/state` (world-state tracker + token estimate), `/help`, `/exit`.
 

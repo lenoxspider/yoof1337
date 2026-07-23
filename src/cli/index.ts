@@ -62,6 +62,7 @@ function buildSystemPrompt(providerName: string): string {
 
 interface CliArgs {
   yolo: boolean;
+  tui: boolean;
   plain: boolean;
   legacyTui: boolean;
   docker: boolean;
@@ -75,12 +76,14 @@ interface CliArgs {
   continue: boolean;
   resume?: string;
   forkSession: boolean;
+  askForApproval: "untrusted" | "on-request" | "never";
 }
 
 function parseArgs(argv: string[]): CliArgs {
   // Default to running run_command on the host (normal terminal behavior).
   const args: CliArgs = {
     yolo: false,
+    tui: false,
     plain: false,
     legacyTui: false,
     docker: false,
@@ -88,10 +91,12 @@ function parseArgs(argv: string[]): CliArgs {
     dir: process.cwd(),
     continue: false,
     forkSession: false,
+    askForApproval: "on-request",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--yolo") args.yolo = true;
+    else if (a === "--tui") args.tui = true;
     else if (a === "--plain") args.plain = true;
     else if (a === "--legacy-tui") args.legacyTui = true;
     else if (a === "--docker") args.docker = true;
@@ -105,6 +110,14 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === "--continue") args.continue = true;
     else if (a === "--resume") args.resume = argv[++i];
     else if (a === "--fork-session") args.forkSession = true;
+    else if (a === "--ask-for-approval" || a === "-a") {
+      const v = (argv[++i] ?? "").trim().toLowerCase();
+      if (v === "untrusted" || v === "on-request" || v === "never") args.askForApproval = v;
+      else {
+        console.error(color(`Invalid --ask-for-approval value: ${v}`, ansi.red));
+        process.exit(2);
+      }
+    }
     else if (a === "--help" || a === "-h") {
       console.log(`yoof1337 -- terminal coding agent
 
@@ -117,7 +130,9 @@ usage: yoof1337 [options]
   --continue         resume the most recent session
   --resume <id>      resume a specific session
   --fork-session     create a new session from a resumed one
-  --yolo             auto-approve all tool calls (mutating ones included)
+  -a, --ask-for-approval <p>  untrusted | on-request | never (default: on-request)
+  --yolo             (deprecated) same as --ask-for-approval never
+  --tui              enable Ink TUI (off by default)
   --plain            disable TUI (use basic readline)
   --legacy-tui       use the lightweight built-in TUI (non-Ink)
   --docker           run run_command inside docker (opt-in isolation)
@@ -231,7 +246,11 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   console.log(color("type a task, or /help for commands\n", ansi.dim));
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const permissions = { yolo: args.yolo, allowCommandPrefixes: state.world.permissions.allowCommandPrefixes };
+  const permissions = {
+    yolo: args.yolo,
+    approvalPolicy: args.yolo ? "never" : args.askForApproval,
+    allowCommandPrefixes: state.world.permissions.allowCommandPrefixes,
+  };
   const io = { print: (t: string) => console.log(t), rl, format: renderMarkdownToPlain, sessionLogger: logger };
 
   async function cmdStatus(): Promise<void> {
@@ -433,7 +452,11 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       })) as any;
   app.start();
   const questioner = app.createQuestioner();
-  const permissions = { yolo: args.yolo, allowCommandPrefixes: state.world.permissions.allowCommandPrefixes };
+  const permissions = {
+    yolo: args.yolo,
+    approvalPolicy: args.yolo ? "never" : args.askForApproval,
+    allowCommandPrefixes: state.world.permissions.allowCommandPrefixes,
+  };
   let turnStartedAt = Date.now();
   // Most recent real prompt-token count reported by the server (true context fill).
   // 0 until the first usage report; the statusline falls back to the estimate.
@@ -821,7 +844,9 @@ async function main(): Promise<void> {
   const { initCoordinator } = await import("../tasks/coordinator.js");
   initCoordinator(sandbox);
 
-  const wantTui = !args.plain && process.stdout.isTTY && process.stdin.isTTY;
+  // Default to plain mode unless the user explicitly opts into the TUI.
+  const canTui = process.stdout.isTTY && process.stdin.isTTY;
+  const wantTui = !args.plain && args.tui && canTui;
   if (wantTui) return runTui(args, sandbox);
   return runPlain(args, sandbox);
 }
