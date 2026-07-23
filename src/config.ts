@@ -5,6 +5,7 @@ export interface ProviderConfig {
   baseUrl: string;
   model: string;
   apiKeyEnv: string | null;
+  apiKey?: string;
   contextWindow: number;
   temperature?: number;
   top_p?: number;

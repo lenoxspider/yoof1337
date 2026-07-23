@@ -24,11 +24,14 @@ export class OpenAiCompatibleClient implements LlmClient {
     this.model = provider.model;
     this.contextWindow = provider.contextWindow;
     this.baseUrl = provider.baseUrl.replace(/\/+$/, "");
-    this.apiKey = provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined;
+    this.apiKey = provider.apiKey || (provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined);
     this.providerOpts = provider;
-    if (opts.requireApiKey && provider.apiKeyEnv && !this.apiKey) {
+    if (opts.requireApiKey && !this.apiKey) {
+      const details = provider.apiKeyEnv
+        ? `set the ${provider.apiKeyEnv} environment variable or provide apiKey in config`
+        : `provide apiKey in config`;
       throw new Error(
-        `Missing API key: set the ${provider.apiKeyEnv} environment variable (never commit keys to source control).`
+        `Missing API key: ${details} (never commit keys to public source control).`
       );
     }
   }
