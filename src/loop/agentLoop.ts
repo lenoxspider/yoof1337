@@ -136,7 +136,7 @@ export async function runTurn(
     let response;
     try {
       io.onLlmStart?.(iteration === 0 ? "thinking" : "thinking");
-      response = await client.chat(state.messages, registry.getActiveDefinitions());
+      response = await client.chat(state.messages, registry.getActiveDefinitions(), io.abortSignal);
       tallies.llmCalls++;
       if (response.usage) {
         tallies.hasUsage = true;
@@ -147,6 +147,11 @@ export async function runTurn(
       }
       io.onLlmEnd?.(progress());
     } catch (err) {
+      if (io.abortSignal?.aborted) {
+        io.print(color("Canceled.", ansi.yellow));
+        io.onTurnEnd?.(progress());
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       io.print(color(`LLM error: ${msg}`, ansi.red));
       io.onTurnEnd?.(progress());

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Provider-agnostic LLM interface. Everything above this layer (agent loop,
  * tools, CLI) only ever sees these types -- swapping OpenAI for a local
  * llama.cpp server is a config change, not a code change.
@@ -45,7 +45,7 @@ export interface LlmResponse {
 export interface LlmClient {
   readonly model: string;
   readonly contextWindow: number;
-  chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LlmResponse>;
+  chat(messages: ChatMessage[], tools: ToolDefinition[], abortSignal?: AbortSignal): Promise<LlmResponse>;
 }
 
 /** Rough token estimate (~4 chars/token). Good enough for compaction thresholds. */

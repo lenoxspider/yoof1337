@@ -36,7 +36,7 @@ export class OpenAiCompatibleClient implements LlmClient {
     }
   }
 
-  async chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LlmResponse> {
+  async chat(messages: ChatMessage[], tools: ToolDefinition[], abortSignal?: AbortSignal): Promise<LlmResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map(toWireMessage),
@@ -68,6 +68,7 @@ export class OpenAiCompatibleClient implements LlmClient {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: abortSignal,
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
