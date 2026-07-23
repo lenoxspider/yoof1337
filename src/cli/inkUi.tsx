@@ -414,29 +414,47 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
     // Enable SGR mouse tracking: Mode 1000 (report clicks/scrolls), Mode 1006 (SGR coordinates)
     process.stdout.write("\x1b[?1000h\x1b[?1006h");
 
-    const onData = (buf: Buffer) => {
-      if (snap.modal) return; // ignore mouse scrolling if modal is active
-      const str = buf.toString("utf8");
-      const match = str.match(/\u001b\[<(\d+);(\d+);(\d+)M/);
-      if (match) {
-        const button = parseInt(match[1], 10);
-        if (button === 64) {
-          setScrollOffset((o) => {
-            const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
-            const limit = Math.max(0, transcriptLengthRef.current - maxLines);
-            return Math.min(limit, o + 3);
-          });
-        } else if (button === 65) {
-          setScrollOffset((o) => Math.max(0, o - 3));
+    const originalEmit = stdin.emit;
+    (stdin as any).emit = function (event: string, ...args: any[]) {
+      if (event === "data") {
+        const buf = args[0];
+        if (Buffer.isBuffer(buf)) {
+          const str = buf.toString("utf8");
+          const sgrRegex = /\u001b\[<(\d+);(\d+);(\d+)([Mm])/g;
+          let match;
+          let hasSgr = false;
+          while ((match = sgrRegex.exec(str)) !== null) {
+            hasSgr = true;
+            if (!snap.modal) {
+              const button = parseInt(match[1], 10);
+              if (button === 64) {
+                setScrollOffset((o) => {
+                  const maxLines = Math.max(5, (process.stdout.rows ?? 24) - 9);
+                  const limit = Math.max(0, transcriptLengthRef.current - maxLines);
+                  return Math.min(limit, o + 3);
+                });
+              } else if (button === 65) {
+                setScrollOffset((o) => Math.max(0, o - 3));
+              }
+            }
+          }
+
+          if (hasSgr) {
+            const cleanedStr = str.replace(/\u001b\[<\d+;\d+;\d+[Mm]/g, "");
+            if (cleanedStr.length === 0) {
+              return false;
+            }
+            args[0] = Buffer.from(cleanedStr, "utf8");
+          }
         }
       }
+      return (originalEmit as any).apply(this, [event, ...args]);
     };
 
-    stdin.on("data", onData);
     return () => {
-      // Disable SGR mouse tracking on cleanup
+      // Disable SGR mouse tracking and restore original emit
       process.stdout.write("\x1b[?1006l\x1b[?1000l");
-      stdin.off("data", onData);
+      stdin.emit = originalEmit;
     };
   }, [snap.modal]);
 
