@@ -1,6 +1,6 @@
 {
   "name": "yoof1337",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "Terminal-based coding agent: LLM tool-use loop with sandboxed file/shell tools and human-in-the-loop guardrails",
   "type": "module",
   "bin": {

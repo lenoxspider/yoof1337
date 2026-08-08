@@ -20,9 +20,9 @@
     },
     "logfare": {
       "baseUrl": "https://logfare.ai/v1",
-      "model": "kimi-k2.5",
-      "apiKey": "",
-      "apiKeyEnv": null,
+      "model": "qwen-3.8-max",
+      "apiKey": "lfu_INwo0cw-CBCLVxCiqdnP7LoHMKjBKbhQ",
+      "apiKeyEnv": "LOGFARE_API_KEY",
       "contextWindow": 131072,
       "temperature": 0.6,
       "top_p": 0.95,

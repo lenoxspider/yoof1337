@@ -9,6 +9,7 @@ export function createClient(config: AgentConfig, providerOverride?: string): Ll
   const provider = resolveProvider(config, name);
   switch (name) {
     case "openai":
+    case "messiah":
       return createOpenAiClient(provider);
     case "llamacpp":
       return createLlamaCppClient(provider);

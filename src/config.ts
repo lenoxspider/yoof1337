@@ -87,6 +87,12 @@ const DEFAULTS: AgentConfig = {
       strictToolSchemas: false,
       toolChoice: "auto",
     },
+    messiah: {
+      baseUrl: "https://gfqwqlrmtlkcgyzzhvio.supabase.co/functions/v1/api-v1-chat",
+      model: "god-v4-pro",
+      apiKeyEnv: "MESSIAH_KEY",
+      contextWindow: 128000,
+    },
   },
   compaction: { thresholdRatio: 0.75, keepLastMessages: 8, useHistorySnip: true, useContextCollapse: true },
   maxToolIterationsPerTurn: 50,
