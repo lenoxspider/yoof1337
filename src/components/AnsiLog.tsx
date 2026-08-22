@@ -1,13 +1,18 @@
 import React from 'react';
 import { Text, Box } from 'ink';
 
+/**
+ * Parses raw ANSI-colored text into Ink <Text> elements with the
+ * appropriate color/bold/dim/italic/underline/inverse props.
+ */
 export const AnsiLog: React.FC<{ raw: string }> = ({ raw }) => {
   const parts: React.JSX.Element[] = [];
   const regex = /\u001b\[([0-9;]*)m/g;
   let match;
   let lastIndex = 0;
-  
+
   let color: any = undefined;
+  let bgColor: any = undefined;
   let bold = false;
   let dim = false;
   let italic = false;
@@ -22,6 +27,7 @@ export const AnsiLog: React.FC<{ raw: string }> = ({ raw }) => {
         <Text
           key={keyCount++}
           color={dim && !color ? "gray" : color}
+          backgroundColor={bgColor}
           bold={bold}
           italic={italic}
           underline={underline}
@@ -31,11 +37,12 @@ export const AnsiLog: React.FC<{ raw: string }> = ({ raw }) => {
         </Text>
       );
     }
-    
+
     const codes = match[1].split(";").map(Number);
     for (const code of codes) {
       if (code === 0) {
         color = undefined;
+        bgColor = undefined;
         bold = false;
         dim = false;
         italic = false;
@@ -54,11 +61,19 @@ export const AnsiLog: React.FC<{ raw: string }> = ({ raw }) => {
       } else if (code >= 30 && code <= 37) {
         const colors = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
         color = colors[code - 30];
+      } else if (code >= 40 && code <= 47) {
+        const bgColors = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+        bgColor = bgColors[code - 40];
       } else if (code >= 90 && code <= 97) {
         const colors = ["gray", "redBright", "greenBright", "yellowBright", "blueBright", "magentaBright", "cyanBright", "whiteBright"];
         color = colors[code - 90];
+      } else if (code >= 100 && code <= 107) {
+        const bgColors = ["blackBright", "redBright", "greenBright", "yellowBright", "blueBright", "magentaBright", "cyanBright", "whiteBright"];
+        bgColor = bgColors[code - 100];
       } else if (code === 39) {
         color = undefined;
+      } else if (code === 49) {
+        bgColor = undefined;
       }
     }
     lastIndex = regex.lastIndex;
@@ -70,6 +85,7 @@ export const AnsiLog: React.FC<{ raw: string }> = ({ raw }) => {
       <Text
         key={keyCount++}
         color={dim && !color ? "gray" : color}
+        backgroundColor={bgColor}
         bold={bold}
         italic={italic}
         underline={underline}

@@ -1,6 +1,10 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 
+/**
+ * Centered overlay modal with double-border.
+ * Uses absolute positioning to float over the main dashboard.
+ */
 export const OverlayModal: React.FC<{
   title: string;
   borderColor?: string;
@@ -8,7 +12,7 @@ export const OverlayModal: React.FC<{
   height?: number;
   onClose?: () => void;
   children: React.ReactNode;
-}> = ({ title, borderColor = "yellow", width = 70, height, onClose, children }) => {
+}> = ({ title, borderColor = "#ffaf5f", width = 70, height, onClose, children }) => {
   return (
     <Box
       position="absolute"
@@ -26,13 +30,12 @@ export const OverlayModal: React.FC<{
         padding={1}
         width={width}
         height={height}
-        backgroundColor="black"
       >
         <Text color={borderColor} bold>{title}</Text>
         {children}
         {onClose && (
           <Box marginTop={1}>
-            <Text color="gray">(Esc to cancel)</Text>
+            <Text color="#6c6c6c">(Esc to cancel)</Text>
           </Box>
         )}
       </Box>

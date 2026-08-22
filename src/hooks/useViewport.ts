@@ -1,10 +1,28 @@
 import { useWindowSize } from 'ink';
 import { useMemo } from 'react';
 
-export const useViewport = (extraRows: number = 9) => {
+const MIN_WIDE_COLS = 80;
+const MAX_SIDEBAR_WIDTH = 40;
+const SIDEBAR_RATIO = 0.3;
+
+export const useViewport = (reservedRows: number = 8) => {
   const { columns, rows } = useWindowSize();
-  const viewportRows = useMemo(() => {
-    return Math.max(5, (rows ?? 24) - extraRows);
-  }, [rows, extraRows]);
-  return { columns, rows, viewportRows };
+
+  return useMemo(() => {
+    const totalRows = rows ?? 24;
+    const totalCols = columns ?? 80;
+    const isWide = totalCols >= MIN_WIDE_COLS;
+    const sidebarWidth = isWide
+      ? Math.min(MAX_SIDEBAR_WIDTH, Math.floor(totalCols * SIDEBAR_RATIO))
+      : 0;
+    const viewportRows = Math.max(5, totalRows - reservedRows);
+
+    return {
+      columns: totalCols,
+      rows: totalRows,
+      viewportRows,
+      isWide,
+      sidebarWidth,
+    };
+  }, [columns, rows, reservedRows]);
 };

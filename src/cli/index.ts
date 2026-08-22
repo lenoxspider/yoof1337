@@ -12,7 +12,6 @@ import type { TurnProgress } from "../loop/agentLoop.js";
 import { compact } from "../loop/compaction.js";
 import type { SandboxContext } from "../tools/sandbox.js";
 import { ansi, color } from "./ui.js";
-import { TuiApp } from "./tui.js";
 import { createInkUi } from "./inkUi.js";
 import { renderMarkdownToPlain } from "./markdown.js";
 import { progressDetail, turnSummary, formatTokens } from "./format.js";
@@ -64,7 +63,6 @@ interface CliArgs {
   yolo: boolean;
   tui: boolean;
   plain: boolean;
-  legacyTui: boolean;
   docker: boolean;
   unsafeHost: boolean;
   dockerImage?: string;
@@ -85,7 +83,6 @@ function parseArgs(argv: string[]): CliArgs {
     yolo: false,
     tui: false,
     plain: false,
-    legacyTui: false,
     docker: false,
     unsafeHost: false,
     dir: process.cwd(),
@@ -98,7 +95,6 @@ function parseArgs(argv: string[]): CliArgs {
     if (a === "--yolo") args.yolo = true;
     else if (a === "--tui") args.tui = true;
     else if (a === "--plain") args.plain = true;
-    else if (a === "--legacy-tui") args.legacyTui = true;
     else if (a === "--docker") args.docker = true;
     else if (a === "--docker-image") args.dockerImage = argv[++i];
     else if (a === "--unsafe-host") args.unsafeHost = true;
@@ -134,7 +130,6 @@ usage: yoof1337 [options]
   --yolo             (deprecated) same as --ask-for-approval never
   --tui              enable Ink TUI (off by default)
   --plain            disable TUI (use basic readline)
-  --legacy-tui       use the lightweight built-in TUI (non-Ink)
   --docker           run run_command inside docker (opt-in isolation)
   --docker-image <i> docker image to use (default: node:22)
   --unsafe-host      (deprecated) same as default host mode
@@ -441,15 +436,10 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     readLine: (promptLabel?: string) => Promise<string | null>;
     createQuestioner: () => any;
     onSigInt?: (handler: () => void) => void;
-  } = (args.legacyTui
-    ? new TuiApp({
-        title: "yoof1337",
-        subtitle: `model: ${client.model} | sandbox: ${sandbox.root}`,
-      })
-    : createInkUi({
-        title: "👾 yoof1337",
-        subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
-      })) as any;
+  } = createInkUi({
+    title: "◆ yoof1337",
+    subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
+  }) as any;
   app.start();
   const questioner = app.createQuestioner();
   const permissions = {
@@ -656,9 +646,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       if (line === null) break;
       if (!line) continue;
 
-      if (!args.legacyTui) {
-        app.println(`${color("you>", ansi.gray)} ${line}`);
-      }
+      app.println(`${color("you>", ansi.gray)} ${line}`);
 
       if (line === "/exit" || line === "/quit") break;
       if (line === "/help") {

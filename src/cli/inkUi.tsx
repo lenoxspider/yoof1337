@@ -1,32 +1,55 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import TextInput from "ink-text-input";
+import { Box, Text, render, useInput } from "ink";
 
 import { useViewport } from "../hooks/useViewport.js";
-import { KeyMap } from "../keyboard/KeyMap.js";
 import { AnsiLog } from "../components/AnsiLog.js";
-import { MouseGuard } from "../components/MouseGuard.js";
 import { OverlayModal } from "../components/OverlayModal.js";
-import { BufferedInput } from "../components/BufferedInput.js";
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Theme — curated 256-color palette for a premium dark-terminal aesthetic
+ * ────────────────────────────────────────────────────────────────────────── */
 
 const THEME = {
-  header: "magenta",
-  subtitle: "cyan",
-  divider: "gray",
-  statusBg: "blue",
-  statusFg: "white",
-  border: "gray",
-  activeBorder: "cyan",
-  alert: "yellow",
-  spinner: "cyan",
-  activity: "magenta",
-  scrollBg: "yellow",
-  scrollFg: "black",
-  highlightBg: "cyan",
-  highlightFg: "black",
+  // Borders & structure
+  border: "#585858",
+  activeBorder: "#5fd7ff",
+
+  // Header & branding
+  header: "#af87ff",
+  subtitle: "#5fd7ff",
+
+  // Status indicators
+  success: "#87d787",
+  warning: "#ffaf5f",
+  error: "#ff5f5f",
+
+  // Text hierarchy
   text: "white",
+  muted: "#6c6c6c",
+
+  // Status bar
+  statusBarBg: "#303030",
+  statusBarFg: "#e4e4e4",
+
+  // Sidebar
+  sidebarHeader: "#afafaf",
+
+  // Spinner & activity
+  spinner: "#5fd7ff",
+  activity: "#af87ff",
+
+  // Autocomplete highlights
+  highlightBg: "#5fd7ff",
+  highlightFg: "#000000",
+
+  // Scroll indicator
+  scrollBg: "#ffaf5f",
+  scrollFg: "#000000",
 } as const;
 
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Slash-command autocomplete list
+ * ────────────────────────────────────────────────────────────────────────── */
 
 const SLASH_COMMANDS = [
   { cmd: "/compact", desc: "summarize and shrink history" },
@@ -45,6 +68,144 @@ const SLASH_COMMANDS = [
   { cmd: "/help", desc: "show help" },
   { cmd: "/exit", desc: "quit" },
 ];
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Custom PromptInput Component
+ * Built directly on top of Ink's useInput to ensure robust control key handling,
+ * cursor positioning, and immunity to terminal mouse escape sequences.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+function PromptInput({
+  value,
+  onChange,
+  onSubmit,
+  focus = true,
+  placeholder = "",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  focus?: boolean;
+  placeholder?: string;
+}): React.JSX.Element {
+  const [cursorOffset, setCursorOffset] = useState(value.length);
+
+  useEffect(() => {
+    setCursorOffset(value.length);
+  }, [value]);
+
+  useInput(
+    (input, key) => {
+      if (!focus) return;
+
+      // Handle Ctrl shortcuts for line editing
+      if (key.ctrl) {
+        if (input === "a" || input === "\x01") {
+          // Ctrl+A: Go to start of line
+          setCursorOffset(0);
+          return;
+        }
+        if (input === "e" || input === "\x05") {
+          // Ctrl+E: Go to end of line
+          setCursorOffset(value.length);
+          return;
+        }
+        if (input === "u" || input === "\x15") {
+          // Ctrl+U: Clear line
+          onChange("");
+          setCursorOffset(0);
+          return;
+        }
+        if (input === "k" || input === "\x0b") {
+          // Ctrl+K: Kill to end of line
+          onChange(value.slice(0, cursorOffset));
+          return;
+        }
+        // Let other Ctrl keys (Ctrl+B, Ctrl+O, Ctrl+T, Ctrl+C) pass through to parent without typing characters
+        return;
+      }
+
+      // Ignore up/down, tab, return so parent keyhandlers can process them
+      if (key.upArrow || key.downArrow || key.tab || (key.shift && key.tab)) {
+        return;
+      }
+
+      if (key.return) {
+        onSubmit();
+        return;
+      }
+
+      if (key.leftArrow) {
+        setCursorOffset((prev) => Math.max(0, prev - 1));
+        return;
+      }
+
+      if (key.rightArrow) {
+        setCursorOffset((prev) => Math.min(value.length, prev + 1));
+        return;
+      }
+
+      if (key.home) {
+        setCursorOffset(0);
+        return;
+      }
+
+      if (key.end) {
+        setCursorOffset(value.length);
+        return;
+      }
+
+      if (key.backspace) {
+        if (cursorOffset > 0) {
+          const next = value.slice(0, cursorOffset - 1) + value.slice(cursorOffset);
+          setCursorOffset((prev) => Math.max(0, prev - 1));
+          onChange(next);
+        }
+        return;
+      }
+
+      if (key.delete) {
+        if (cursorOffset < value.length) {
+          const next = value.slice(0, cursorOffset) + value.slice(cursorOffset + 1);
+          onChange(next);
+        }
+        return;
+      }
+
+      // Filter out rogue escape codes (like stray mouse tracking or CSI sequences)
+      if (input.startsWith("\x1b") || input.startsWith("[<")) {
+        return;
+      }
+
+      // Regular character typing or pasted text
+      const next = value.slice(0, cursorOffset) + input + value.slice(cursorOffset);
+      setCursorOffset((prev) => prev + input.length);
+      onChange(next);
+    },
+    { isActive: focus }
+  );
+
+  const safeOffset = Math.min(value.length, Math.max(0, cursorOffset));
+  const before = value.slice(0, safeOffset);
+  const cursorChar = safeOffset < value.length ? value[safeOffset] : " ";
+  const after = safeOffset < value.length ? value.slice(safeOffset + 1) : "";
+
+  if (value.length === 0 && placeholder && !focus) {
+    return <Text color="gray">{placeholder}</Text>;
+  }
+
+  return (
+    <Text>
+      {before}
+      {focus ? <Text inverse>{cursorChar}</Text> : cursorChar}
+      {after}
+    </Text>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Types
+ * ────────────────────────────────────────────────────────────────────────── */
 
 type Questioner = {
   question: (prompt: string) => Promise<string>;
@@ -68,10 +229,15 @@ type StoreSnapshot = {
   lastFoldedOutput: string | null;
   fullOutputModal: boolean;
   fullTranscriptModal: boolean;
-  /** Live activity indicator: null when idle, else the current phase + start time + detail. */
   busy: null | { activity: string; startedAt: number; detail?: string };
   pastePreview: string[] | null;
+  sidebarVisible: boolean;
 };
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * InkStore — reactive state container shared between the REPL loop and the
+ * React/Ink render tree.
+ * ────────────────────────────────────────────────────────────────────────── */
 
 class InkStore {
   private listeners = new Set<() => void>();
@@ -99,6 +265,7 @@ class InkStore {
       fullTranscriptModal: false,
       busy: null,
       pastePreview: null,
+      sidebarVisible: true,
     };
   }
 
@@ -115,6 +282,8 @@ class InkStore {
     for (const fn of this.listeners) fn();
   }
 
+  /* ── Output ────────────────────────────────────────────────────────────── */
+
   println(text: string): void {
     const next = [...this.snapshot.transcript];
     for (const l of String(text ?? "").split(/\r?\n/)) next.push(l);
@@ -122,16 +291,13 @@ class InkStore {
     this.emit();
   }
 
+  /* ── Status / busy / tools ─────────────────────────────────────────────── */
+
   setStatus(status: string): void {
     this.snapshot = { ...this.snapshot, status };
     this.emit();
   }
 
-  /**
-   * Set (or clear, with null) the live "busy" indicator that drives the
-   * animated spinner + elapsed timer. `startedAt` anchors the elapsed clock;
-   * pass it once at turn start and keep it stable so the timer counts up.
-   */
   setBusy(busy: null | { activity: string; startedAt: number; detail?: string }): void {
     this.snapshot = { ...this.snapshot, busy };
     this.emit();
@@ -164,42 +330,40 @@ class InkStore {
     this.emit();
   }
 
+  toggleSidebar(): void {
+    this.snapshot = { ...this.snapshot, sidebarVisible: !this.snapshot.sidebarVisible };
+    this.emit();
+  }
+
+  /* ── Input handling ────────────────────────────────────────────────────── */
+
   setPromptLabel(label: string): void {
     this.snapshot = { ...this.snapshot, promptLabel: label };
     this.emit();
   }
 
   setInput(value: string): void {
-    if (value.includes("\t")) {
-      this.commitAutocomplete();
-      return;
-    }
-
     // Detect paste (multiple lines appear at once)
     if (this.resolveLine && /[\r\n]/.test(value)) {
-      const lines = value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const lines = value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       if (lines.length > 0) {
-        this.snapshot = {
-          ...this.snapshot,
-          pastePreview: lines,
-          input: ""
-        };
+        this.snapshot = { ...this.snapshot, pastePreview: lines, input: "" };
         this.emit();
         return;
       }
     }
 
-    let autocompleteItems: {cmd:string, desc:string}[] = [];
+    let autocompleteItems: { cmd: string; desc: string }[] = [];
     if (value.startsWith("/")) {
       const lower = value.toLowerCase();
-      autocompleteItems = SLASH_COMMANDS.filter(c => c.cmd.startsWith(lower));
+      autocompleteItems = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(lower));
     }
 
-    this.snapshot = { 
-      ...this.snapshot, 
+    this.snapshot = {
+      ...this.snapshot,
       input: value,
       autocompleteItems,
-      autocompleteIndex: autocompleteItems.length > 0 ? 0 : -1
+      autocompleteIndex: autocompleteItems.length > 0 ? 0 : -1,
     };
     this.emit();
   }
@@ -208,7 +372,12 @@ class InkStore {
     if (this.snapshot.autocompleteItems.length > 0 && this.snapshot.autocompleteIndex >= 0) {
       const selected = this.snapshot.autocompleteItems[this.snapshot.autocompleteIndex];
       if (selected) {
-        this.snapshot = { ...this.snapshot, input: selected.cmd + " ", autocompleteItems: [], autocompleteIndex: -1 };
+        this.snapshot = {
+          ...this.snapshot,
+          input: selected.cmd + " ",
+          autocompleteItems: [],
+          autocompleteIndex: -1,
+        };
         this.emit();
       }
     }
@@ -230,12 +399,20 @@ class InkStore {
   }
 
   submitInput(): void {
+    // If autocomplete is active and an item is selected, submit that item
     if (this.snapshot.autocompleteItems.length > 0 && this.snapshot.autocompleteIndex >= 0) {
       const selected = this.snapshot.autocompleteItems[this.snapshot.autocompleteIndex];
       if (selected) {
         const line = selected.cmd;
         const newHistory = line ? [...this.snapshot.history, line] : this.snapshot.history;
-        this.snapshot = { ...this.snapshot, input: "", history: newHistory, historyIndex: -1, autocompleteItems: [], autocompleteIndex: -1 };
+        this.snapshot = {
+          ...this.snapshot,
+          input: "",
+          history: newHistory,
+          historyIndex: -1,
+          autocompleteItems: [],
+          autocompleteIndex: -1,
+        };
         this.emit();
         if (this.resolveLine) {
           const r = this.resolveLine;
@@ -268,15 +445,13 @@ class InkStore {
     }
   }
 
+  /* ── Paste handling ────────────────────────────────────────────────────── */
+
   confirmPasteLine(index: number): void {
     const lines = this.snapshot.pastePreview;
     if (!lines) return;
     const cmd = lines[index] ?? "";
-    this.snapshot = {
-      ...this.snapshot,
-      pastePreview: null,
-      input: ""
-    };
+    this.snapshot = { ...this.snapshot, pastePreview: null, input: "" };
     this.emit();
     if (cmd) {
       if (this.resolveLine) {
@@ -290,31 +465,23 @@ class InkStore {
   }
 
   cancelPastePreview(): void {
-    this.snapshot = {
-      ...this.snapshot,
-      pastePreview: null,
-      input: ""
-    };
+    this.snapshot = { ...this.snapshot, pastePreview: null, input: "" };
     this.emit();
   }
 
+  /* ── History navigation ────────────────────────────────────────────────── */
+
   navigateHistory(direction: "up" | "down"): void {
-    const { history, historyIndex, input } = this.snapshot;
+    const { history, historyIndex } = this.snapshot;
     if (history.length === 0) return;
 
     let nextIndex = historyIndex;
     if (direction === "up") {
-      if (historyIndex === -1) {
-        nextIndex = history.length - 1;
-      } else if (historyIndex > 0) {
-        nextIndex = historyIndex - 1;
-      }
+      if (historyIndex === -1) nextIndex = history.length - 1;
+      else if (historyIndex > 0) nextIndex = historyIndex - 1;
     } else if (direction === "down") {
-      if (historyIndex !== -1 && historyIndex < history.length - 1) {
-        nextIndex = historyIndex + 1;
-      } else if (historyIndex === history.length - 1) {
-        nextIndex = -1; // back to empty input
-      }
+      if (historyIndex !== -1 && historyIndex < history.length - 1) nextIndex = historyIndex + 1;
+      else if (historyIndex === history.length - 1) nextIndex = -1;
     }
 
     if (nextIndex === historyIndex) return;
@@ -327,11 +494,13 @@ class InkStore {
     this.emit();
   }
 
+  /* ── Line queue / readline ─────────────────────────────────────────────── */
+
   private lineQueue: string[] = [];
 
   async readLine(promptLabel: string): Promise<string> {
     this.setPromptLabel(promptLabel);
-    this.setStatus("enter to send • /help • ctrl+c to exit");
+    this.setStatus("Enter to send • /help • Ctrl+C to exit");
     if (this.lineQueue.length > 0) {
       return Promise.resolve(this.lineQueue.shift()!);
     }
@@ -339,6 +508,8 @@ class InkStore {
       this.resolveLine = resolve;
     });
   }
+
+  /* ── Permission modal ──────────────────────────────────────────────────── */
 
   createQuestioner(): Questioner {
     return {
@@ -354,7 +525,6 @@ class InkStore {
 
   setModalBuffer(v: string): void {
     if (!this.snapshot.modal) return;
-    // For permission prompts, keep only the first line if a multi-line paste occurs.
     const firstLine = v.split(/\r?\n/, 1)[0] ?? "";
     this.snapshot = { ...this.snapshot, modal: { ...this.snapshot.modal, buffer: firstLine } };
     this.emit();
@@ -382,6 +552,10 @@ class InkStore {
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Public API
+ * ────────────────────────────────────────────────────────────────────────── */
+
 export type InkUi = {
   start: () => void;
   stop: () => void;
@@ -407,21 +581,23 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
         process.stdin.setRawMode(true);
         process.stdin.resume();
       }
-      const instance = render(<InkRoot store={store} onExit={() => {
-        if (sigintHandler) sigintHandler();
-        else {
-          instance.unmount();
-          if (process.stdin.isTTY) {
-            process.stdin.setRawMode(false);
-          }
-          process.exit(0);
-        }
-      }} />, { exitOnCtrlC: false });
+      const instance = render(
+        <InkRoot
+          store={store}
+          onExit={() => {
+            if (sigintHandler) sigintHandler();
+            else {
+              instance.unmount();
+              if (process.stdin.isTTY) process.stdin.setRawMode(false);
+              process.exit(0);
+            }
+          }}
+        />,
+        { exitOnCtrlC: false }
+      );
       unmount = () => {
         instance.unmount();
-        if (process.stdin.isTTY) {
-          process.stdin.setRawMode(false);
-        }
+        if (process.stdin.isTTY) process.stdin.setRawMode(false);
       };
     },
     stop: () => {
@@ -448,294 +624,358 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
   };
 }
 
+/* ──────────────────────────────────────────────────────────────────────────────
+ * InkRoot — the main dashboard component
+ * ────────────────────────────────────────────────────────────────────────── */
+
 function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): React.JSX.Element {
   const [snap, setSnap] = useState<StoreSnapshot>(store.get());
   const [scrollOffset, setScrollOffset] = useState(0);
   const [prevLength, setPrevLength] = useState(snap.transcript.length);
 
-  // Responsive Layout Dimension State via custom useViewport hook
-  const { columns, rows, viewportRows } = useViewport(9);
-  const dimensions = useMemo(() => ({ columns, rows }), [columns, rows]);
+  const { columns, rows, viewportRows, isWide, sidebarWidth } = useViewport(8);
 
   useEffect(() => store.subscribe(() => setSnap(store.get())), [store]);
 
-  // Adjust scroll offset when transcript length changes (e.g. new lines printed or compaction)
+  // Adjust scroll offset when transcript length changes
   useEffect(() => {
     if (snap.transcript.length !== prevLength) {
       const diff = snap.transcript.length - prevLength;
       setPrevLength(snap.transcript.length);
       setScrollOffset((o) => {
         const limit = Math.max(0, snap.transcript.length - viewportRows);
-        if (diff < 0) {
-          return Math.min(limit, Math.max(0, o + diff));
-        }
-        if (o > 0 && diff > 0) {
-          return Math.min(limit, o + diff);
-        }
+        if (diff < 0) return Math.min(limit, Math.max(0, o + diff));
+        if (o > 0 && diff > 0) return Math.min(limit, o + diff);
         return Math.min(limit, o);
       });
     }
   }, [snap.transcript.length, prevLength, viewportRows]);
 
-  // Ref snap & viewportRows to prevent stale closures inside MouseGuard scroll callbacks
-
-  const snapRef = React.useRef(snap);
-  useEffect(() => {
-    snapRef.current = snap;
-  }, [snap]);
-
-  const viewportRowsRef = React.useRef(viewportRows);
-  useEffect(() => {
-    viewportRowsRef.current = viewportRows;
-  }, [viewportRows]);
-
-  // Mouse wheel scroll via SGR mouse tracking
-  const transcriptLengthRef = React.useRef(snap.transcript.length);
-  useEffect(() => {
-    transcriptLengthRef.current = snap.transcript.length;
-  }, [snap.transcript.length]);
-
-
-
+  // Compute visible transcript slice
   const view = useMemo(() => {
     const end = snap.transcript.length - scrollOffset;
     const start = Math.max(0, end - viewportRows);
     return snap.transcript.slice(start, end);
   }, [snap.transcript, scrollOffset, viewportRows]);
 
-  const keyMap = useMemo(() => {
-    const km = new KeyMap();
-    
-    // Global context hotkeys (priority 1)
-    km.bind({ key: { name: "o", ctrl: true }, ctx: "global", priority: 1 }, () => store.toggleFullOutputModal());
-    km.bind({ key: { name: "t", ctrl: true }, ctx: "global", priority: 1 }, () => store.toggleFullTranscriptModal());
+  const showSidebar = isWide && snap.sidebarVisible;
 
-    // Autocomplete context (priority 3)
-    km.bind({ key: { name: "upArrow" }, ctx: "autocomplete", priority: 3 }, () => store.navigateAutocomplete("up"));
-    km.bind({ key: { name: "downArrow" }, ctx: "autocomplete", priority: 3 }, () => store.navigateAutocomplete("down"));
-    km.bind({ key: { name: "rightArrow" }, ctx: "autocomplete", priority: 3 }, () => store.commitAutocomplete());
-    km.bind({ key: { name: "tab" }, ctx: "autocomplete", priority: 3 }, () => store.commitAutocomplete());
-
-    // Viewport Context scrollback (priority 2)
-    km.bind({ key: { name: "pageUp" }, ctx: "viewport", priority: 2 }, () => {
-      const limit = Math.max(0, snap.transcript.length - viewportRows);
-      const amount = Math.max(1, Math.floor(viewportRows / 2));
-      setScrollOffset((o) => Math.min(limit, o + amount));
-    });
-    km.bind({ key: { name: "pageDown" }, ctx: "viewport", priority: 2 }, () => {
-      const amount = Math.max(1, Math.floor(viewportRows / 2));
-      setScrollOffset((o) => Math.max(0, o - amount));
-    });
-    km.bind({ key: { name: "upArrow", shift: true }, ctx: "viewport", priority: 2 }, () => {
-      const limit = Math.max(0, snap.transcript.length - viewportRows);
-      setScrollOffset((o) => Math.min(limit, o + 1));
-    });
-    km.bind({ key: { name: "downArrow", shift: true }, ctx: "viewport", priority: 2 }, () => {
-      setScrollOffset((o) => Math.max(0, o - 1));
-    });
-    km.bind({ key: { name: "return" }, ctx: "viewport", priority: 2 }, () => setScrollOffset(0));
-
-    // Normal Context history (priority 1)
-    km.bind({ key: { name: "upArrow" }, ctx: "history", priority: 1 }, () => store.navigateHistory("up"));
-    km.bind({ key: { name: "downArrow" }, ctx: "history", priority: 1 }, () => store.navigateHistory("down"));
-    
-    // Shift+Arrows scroll triggers in global context if autocomplete or history are active
-    km.bind({ key: { name: "pageUp" }, ctx: "global", priority: 1 }, () => {
-      const limit = Math.max(0, snap.transcript.length - viewportRows);
-      const amount = Math.max(1, Math.floor(viewportRows / 2));
-      setScrollOffset((o) => Math.min(limit, o + amount));
-    });
-    km.bind({ key: { name: "pageDown" }, ctx: "global", priority: 1 }, () => {
-      const amount = Math.max(1, Math.floor(viewportRows / 2));
-      setScrollOffset((o) => Math.max(0, o - amount));
-    });
-    km.bind({ key: { name: "upArrow", shift: true }, ctx: "global", priority: 1 }, () => {
-      const limit = Math.max(0, snap.transcript.length - viewportRows);
-      setScrollOffset((o) => Math.min(limit, o + 1));
-    });
-    km.bind({ key: { name: "downArrow", shift: true }, ctx: "global", priority: 1 }, () => {
-      setScrollOffset((o) => Math.max(0, o - 1));
-    });
-
-    return km;
-  }, [viewportRows, snap.transcript.length]);
+  // ── Global Input & Keybindings ──────────────────────────────────────────
 
   useInput((input, key) => {
-    if (snap.modal || snap.pastePreview) return; // let modal / paste handle keys
-    if (snap.fullOutputModal || snap.fullTranscriptModal) return; // let modal components handle keys
-    
-    let context = "history";
-    if (snap.autocompleteItems.length > 0) {
-      context = "autocomplete";
-    } else if (scrollOffset > 0) {
-      context = "viewport";
+    // If a modal or preview is open, let that modal handle keys
+    if (snap.modal || snap.pastePreview) return;
+    if (snap.fullOutputModal || snap.fullTranscriptModal) return;
+
+    // Ctrl+C to exit
+    if (key.ctrl && (input === "c" || input === "\x03")) {
+      onExit();
+      return;
     }
 
-    const action = keyMap.resolve(key, context);
-    if (action) {
-      action();
+    // Ctrl+B: Toggle Sidebar (when wide)
+    if (key.ctrl && (input === "b" || input === "\x02")) {
+      if (isWide) store.toggleSidebar();
+      return;
+    }
+
+    // Ctrl+O: Toggle Full Output Modal
+    if (key.ctrl && (input === "o" || input === "\x0f")) {
+      store.toggleFullOutputModal();
+      return;
+    }
+
+    // Ctrl+T: Toggle Full Transcript Modal
+    if (key.ctrl && (input === "t" || input === "\x14")) {
+      store.toggleFullTranscriptModal();
+      return;
+    }
+
+    // Autocomplete Navigation
+    if (snap.autocompleteItems.length > 0) {
+      if (key.upArrow) {
+        store.navigateAutocomplete("up");
+        return;
+      }
+      if (key.downArrow) {
+        store.navigateAutocomplete("down");
+        return;
+      }
+      if (key.tab || key.rightArrow) {
+        store.commitAutocomplete();
+        return;
+      }
+      if (key.escape) {
+        store.setInput("");
+        return;
+      }
+    }
+
+    // Viewport Scroll
+    if (key.pageUp) {
+      const limit = Math.max(0, snap.transcript.length - viewportRows);
+      const amount = Math.max(1, Math.floor(viewportRows / 2));
+      setScrollOffset((o) => Math.min(limit, o + amount));
+      return;
+    }
+    if (key.pageDown) {
+      const amount = Math.max(1, Math.floor(viewportRows / 2));
+      setScrollOffset((o) => Math.max(0, o - amount));
+      return;
+    }
+    if (key.shift && key.upArrow) {
+      const limit = Math.max(0, snap.transcript.length - viewportRows);
+      setScrollOffset((o) => Math.min(limit, o + 1));
+      return;
+    }
+    if (key.shift && key.downArrow) {
+      setScrollOffset((o) => Math.max(0, o - 1));
+      return;
+    }
+    if (scrollOffset > 0 && key.return) {
+      setScrollOffset(0);
+      return;
+    }
+
+    // History navigation (only when not scrolled and no autocomplete)
+    if (scrollOffset === 0 && snap.autocompleteItems.length === 0) {
+      if (key.upArrow) {
+        store.navigateHistory("up");
+        return;
+      }
+      if (key.downArrow) {
+        store.navigateHistory("down");
+        return;
+      }
     }
   });
+
+  // ── Full-screen modal overrides ─────────────────────────────────────────
 
   if (snap.fullOutputModal && snap.lastFoldedOutput) {
     return <FullOutputModal text={snap.lastFoldedOutput} onClose={() => store.toggleFullOutputModal()} />;
   }
-
   if (snap.fullTranscriptModal) {
     return <FullTranscriptModal transcript={snap.transcript} onClose={() => store.toggleFullTranscriptModal()} />;
   }
 
-  // Permission Request Overlay Modal (Centered, dim background layout with Focus Trap)
-  // Wrap rendering block in MouseGuard component for automatic SGR state tracking
+  // ── Hotkey legend ───────────────────────────────────────────────────────
+
+  const legendText = getHotkeyLegend({
+    modal: !!snap.modal,
+    pastePreview: !!snap.pastePreview,
+    scrolled: scrollOffset > 0,
+    sidebarVisible: snap.sidebarVisible,
+    isWide,
+  });
+
+  const statusBarText = ` ${snap.statusline || "ready"} `;
+
   return (
-    <MouseGuard
-      onScrollUp={() => {
-        setScrollOffset((o) => {
-          const limit = Math.max(0, transcriptLengthRef.current - viewportRowsRef.current);
-          return Math.min(limit, o + 3);
-        });
-      }}
-      onScrollDown={() => {
-        setScrollOffset((o) => Math.max(0, o - 3));
-      }}
-      disabled={!!snap.modal || !!snap.pastePreview}
-    >
-      <Box flexDirection="column" height={dimensions.rows} width={dimensions.columns}>
-        {/* Main dashboard content, always visible in background */}
-        <Box flexDirection="column" width="100%" height="100%">
-          <Box flexDirection="row">
-            <Text color={THEME.header} bold>
-              {snap.header}
-            </Text>
-            <Text color={THEME.divider}> {"--"} </Text>
-            <Text color={THEME.subtitle}>{snap.subtitle}</Text>
-          </Box>
-          <Box>
-            <Text backgroundColor={THEME.statusBg} color={THEME.statusFg}> {snap.statusline} </Text>
-          </Box>
-          <Box flexDirection="column" flexGrow={1}>
-            <Box
-              borderStyle="round"
-              borderColor={THEME.border}
-              flexDirection="column"
-              flexGrow={1}
-              paddingX={1}
-            >
-              {view.map((l, i) => (
-                <Box key={i}><AnsiLog raw={l}/></Box>
-              ))}
-            </Box>
-            {scrollOffset > 0 && (
-              <Box paddingX={1}>
-                <Text backgroundColor={THEME.scrollBg} color={THEME.scrollFg} bold> ▲ SCROLLED UP ({scrollOffset} lines) • Press Enter or Shift+Down to return ▲ </Text>
-              </Box>
-            )}
-            {snap.tools.length > 0 && (
-              <Box borderStyle="round" borderColor={THEME.border} flexDirection="column" paddingX={1}>
-                <Text color={THEME.divider}>tools running</Text>
-                {snap.tools.map((l, i) => <Text key={i}>{l}</Text>)}
-              </Box>
-            )}
-          </Box>
+    <Box flexDirection="column" height={rows} width={columns}>
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <Box>
+        <Text color={THEME.header} bold>  ◆ {snap.header}</Text>
+        <Text color={THEME.border}> ── </Text>
+        <Text color={THEME.subtitle}>{snap.subtitle}</Text>
+      </Box>
 
-          {snap.autocompleteItems.length > 0 && (
-            <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={THEME.activeBorder} width="50%">
-              {snap.autocompleteItems.map((item, i) => (
-                <Text key={item.cmd} color={i === snap.autocompleteIndex ? THEME.highlightFg : THEME.text} backgroundColor={i === snap.autocompleteIndex ? THEME.highlightBg : undefined}>
-                  {item.cmd.padEnd(15)} <Text color={i === snap.autocompleteIndex ? THEME.highlightFg : THEME.divider}>{item.desc}</Text>
-                </Text>
-              ))}
-            </Box>
-          )}
+      {/* ── Status Bar ─────────────────────────────────────────────── */}
+      <Box>
+        <Text backgroundColor={THEME.statusBarBg} color={THEME.statusBarFg}>
+          {statusBarText}
+        </Text>
+      </Box>
 
-          <Box flexDirection="row">
-            <Text bold>{snap.promptLabel}</Text>
-            <BufferedInput
-              value={snap.input}
-              onChange={(v) => store.setInput(v)}
-              onSubmit={() => store.submitInput()}
-              focus={!snap.modal && !snap.pastePreview}
-            />
-          </Box>
-          <Box>
-            {snap.busy ? (
-              <BusyLine busy={snap.busy} />
-            ) : (
-              <Text color={THEME.divider}>{snap.status}</Text>
-            )}
-          </Box>
-          <InkKeys onExit={() => onExit()} />
+      {/* ── Main Content: Split Pane ───────────────────────────────── */}
+      <Box flexDirection="row" flexGrow={1}>
+        {/* Transcript Panel */}
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          borderStyle="round"
+          borderColor={scrollOffset > 0 ? THEME.activeBorder : THEME.border}
+          paddingX={1}
+        >
+          {view.map((l, i) => (
+            <Box key={i}><AnsiLog raw={l} /></Box>
+          ))}
         </Box>
 
-        {/* Permission overlay modal centered with absolute positioning */}
-        {snap.modal && (
-          <OverlayModal title="⚠️ PERMISSION REQUESTED" borderColor={THEME.alert} width={Math.min(dimensions.columns - 4, 70)}>
-            <Box marginY={1} flexDirection="column">
-              {snap.modal.prompt.split(/\r?\n/).map((l, i) => (
-                <Text key={i}>{l}</Text>
-              ))}
-            </Box>
-            <Box flexDirection="row" marginTop={1}>
-              <Text bold>Approve? [y/N]: </Text>
-              <BufferedInput
-                value={snap.modal.buffer}
-                onChange={(v) => store.setModalBuffer(v)}
-                onSubmit={() => store.submitModal()}
-                focus={true}
-              />
-            </Box>
-            <Box marginTop={1}>
-              <Text color={THEME.divider}>enter to confirm • esc to cancel</Text>
-            </Box>
-            <InkModalKeys onCancel={() => store.cancelModal()} onExit={() => onExit()} />
-          </OverlayModal>
-        )}
+        {/* Sidebar */}
+        {showSidebar && (
+          <Box
+            flexDirection="column"
+            width={sidebarWidth}
+            borderStyle="round"
+            borderColor={THEME.border}
+            paddingX={1}
+          >
+            {/* Status */}
+            <Text color={THEME.sidebarHeader} bold>◼ STATUS</Text>
+            {snap.busy ? (
+              <Text color={THEME.activity} wrap="truncate-end">
+                {"● "}{snap.busy.activity}
+              </Text>
+            ) : (
+              <Text color={THEME.muted}>● Idle</Text>
+            )}
+            <Text>{" "}</Text>
 
-        {/* Split-line Paste review overlay modal centered with absolute positioning */}
-        {snap.pastePreview && (
-          <OverlayModal title="📋 Paste detected – review each line:" borderColor={THEME.activeBorder} width={Math.min(dimensions.columns - 4, 70)}>
-            <Box flexDirection="column" marginY={1}>
-              {snap.pastePreview.map((line, i) => (
-                <Box key={i} marginLeft={2}>
-                  <Text color={THEME.alert}>{i + 1}. </Text>
-                  <Text color={THEME.text}>{line}</Text>
-                  <Text color={THEME.divider}> (press </Text>
-                  <Text color="green">Enter</Text>
-                  <Text color={THEME.divider}> to send)</Text>
-                </Box>
-              ))}
-            </Box>
-            <Box flexDirection="row" marginTop={1}>
-              <Text bold>Enter line number to send: </Text>
-              <BufferedInput
-                value={snap.input}
-                onChange={(v) => store.setInput(v)}
-                onSubmit={() => {
-                  const idx = parseInt(snap.input, 10) - 1;
-                  store.confirmPasteLine(idx);
-                }}
-                focus={true}
-                placeholder="Enter line number"
-              />
-            </Box>
-            <Box marginTop={1}>
-              <Text color={THEME.divider}>Esc to cancel</Text>
-            </Box>
-            <InkModalKeys onCancel={() => store.cancelPastePreview()} onExit={() => onExit()} />
-          </OverlayModal>
+            {/* Tools */}
+            <Text color={THEME.sidebarHeader} bold>◼ TOOLS</Text>
+            {snap.tools.length > 0 ? (
+              snap.tools.slice(-6).map((l, i) => (
+                <Text key={i} color={THEME.muted} wrap="truncate-end">{l}</Text>
+              ))
+            ) : (
+              <Text color={THEME.muted}>  (none)</Text>
+            )}
+            <Text>{" "}</Text>
+
+            {/* Info */}
+            <Text color={THEME.sidebarHeader} bold>◼ INFO</Text>
+            <Text color={THEME.muted} wrap="truncate-end">
+              {snap.status || "Ready"}
+            </Text>
+          </Box>
         )}
       </Box>
-    </MouseGuard>
+
+      {/* ── Scroll Indicator ───────────────────────────────────────── */}
+      {scrollOffset > 0 && (
+        <Box paddingX={1}>
+          <Text backgroundColor={THEME.scrollBg} color={THEME.scrollFg} bold>
+            {" ▲ SCROLLED (" + scrollOffset + " lines) • Enter to return ▲ "}
+          </Text>
+        </Box>
+      )}
+
+      {/* ── Autocomplete Popup ─────────────────────────────────────── */}
+      {snap.autocompleteItems.length > 0 && (
+        <Box
+          flexDirection="column"
+          paddingX={1}
+          borderStyle="single"
+          borderColor={THEME.activeBorder}
+          width="50%"
+        >
+          {snap.autocompleteItems.map((item, i) => (
+            <Text
+              key={item.cmd}
+              color={i === snap.autocompleteIndex ? THEME.highlightFg : undefined}
+              backgroundColor={i === snap.autocompleteIndex ? THEME.highlightBg : undefined}
+              wrap="truncate-end"
+            >
+              {item.cmd.padEnd(15)}{" "}
+              <Text color={i === snap.autocompleteIndex ? THEME.highlightFg : THEME.muted}>
+                {item.desc}
+              </Text>
+            </Text>
+          ))}
+        </Box>
+      )}
+
+      {/* ── Input Line ─────────────────────────────────────────────── */}
+      <Box>
+        <Text bold color={THEME.activeBorder}>{snap.promptLabel}</Text>
+        <PromptInput
+          value={snap.input}
+          onChange={(v) => store.setInput(v)}
+          onSubmit={() => store.submitInput()}
+          focus={!snap.modal && !snap.pastePreview}
+        />
+      </Box>
+
+      {/* ── Busy / Status ──────────────────────────────────────────── */}
+      <Box>
+        {snap.busy ? (
+          <BusyLine busy={snap.busy} />
+        ) : (
+          <Text color={THEME.muted}>{snap.status}</Text>
+        )}
+      </Box>
+
+      {/* ── Hotkey Legend ───────────────────────────────────────────── */}
+      <Box>
+        <Text color={THEME.muted}>{legendText}</Text>
+      </Box>
+
+      <InkKeys onExit={() => onExit()} />
+
+      {/* ── Permission Modal (overlay) ─────────────────────────────── */}
+      {snap.modal && (
+        <OverlayModal
+          title="⚠️  PERMISSION REQUESTED"
+          borderColor={THEME.warning}
+          width={Math.min(columns - 4, 70)}
+        >
+          <Box marginY={1} flexDirection="column">
+            {snap.modal.prompt.split(/\r?\n/).map((l, i) => (
+              <Text key={i}>{l}</Text>
+            ))}
+          </Box>
+          <Box flexDirection="row" marginTop={1}>
+            <Text bold>Approve? [y/N]: </Text>
+            <PromptInput
+              value={snap.modal.buffer}
+              onChange={(v) => store.setModalBuffer(v)}
+              onSubmit={() => store.submitModal()}
+              focus={true}
+            />
+          </Box>
+          <Box marginTop={1}>
+            <Text color={THEME.muted}>Enter to confirm • Esc to cancel</Text>
+          </Box>
+          <InkModalKeys onCancel={() => store.cancelModal()} onExit={() => onExit()} />
+        </OverlayModal>
+      )}
+
+      {/* ── Paste Review Modal (overlay) ───────────────────────────── */}
+      {snap.pastePreview && (
+        <OverlayModal
+          title="📋  Paste detected – review each line:"
+          borderColor={THEME.activeBorder}
+          width={Math.min(columns - 4, 70)}
+        >
+          <Box flexDirection="column" marginY={1}>
+            {snap.pastePreview.map((line, i) => (
+              <Box key={i} marginLeft={2}>
+                <Text color={THEME.warning}>{i + 1}. </Text>
+                <Text>{line}</Text>
+              </Box>
+            ))}
+          </Box>
+          <Box flexDirection="row" marginTop={1}>
+            <Text bold>Enter line number to send: </Text>
+            <PromptInput
+              value={snap.input}
+              onChange={(v) => store.setInput(v)}
+              onSubmit={() => {
+                const idx = parseInt(snap.input, 10) - 1;
+                store.confirmPasteLine(idx);
+              }}
+              focus={true}
+              placeholder="Enter line number"
+            />
+          </Box>
+          <Box marginTop={1}>
+            <Text color={THEME.muted}>Esc to cancel</Text>
+          </Box>
+          <InkModalKeys onCancel={() => store.cancelPastePreview()} onExit={() => onExit()} />
+        </OverlayModal>
+      )}
+    </Box>
   );
 }
 
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Sub-components
+ * ────────────────────────────────────────────────────────────────────────── */
+
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/**
- * Animated "working" line: braille spinner + current activity + live elapsed
- * timer, re-rendering ~10x/sec while `busy` is set. Mirrors the Claude Code /
- * Codex "✻ Brewed for 4m 52s" affordance.
- */
+/** Animated braille spinner + activity label + elapsed timer. */
 function BusyLine({ busy }: { busy: { activity: string; startedAt: number; detail?: string } }): React.JSX.Element {
   const [frame, setFrame] = useState(0);
   const [, setTick] = useState(0);
@@ -756,7 +996,7 @@ function BusyLine({ busy }: { busy: { activity: string; startedAt: number; detai
   return (
     <Text color={THEME.spinner}>
       {SPINNER_FRAMES[frame]} <Text color={THEME.activity}>{busy.activity}</Text>
-      <Text color={THEME.divider}>
+      <Text color={THEME.muted}>
         {" "}({timeStr}
         {busy.detail ? ` · ${busy.detail}` : ""})
       </Text>
@@ -764,8 +1004,31 @@ function BusyLine({ busy }: { busy: { activity: string; startedAt: number; detai
   );
 }
 
+/** Context-aware hotkey legend for the footer. */
+function getHotkeyLegend(state: {
+  modal: boolean;
+  pastePreview: boolean;
+  scrolled: boolean;
+  sidebarVisible: boolean;
+  isWide: boolean;
+}): string {
+  if (state.modal) return "Enter Confirm │ Esc Cancel";
+  if (state.pastePreview) return "# Send Line │ Esc Cancel";
+
+  const items: string[] = [];
+  if (state.isWide) {
+    items.push(state.sidebarVisible ? "^B Hide Panel" : "^B Show Panel");
+  }
+  items.push("^O Expand", "^T Transcript");
+  if (state.scrolled) {
+    items.push("Enter Return");
+  }
+  items.push("PgUp/Dn Scroll", "Tab Complete", "/help", "^C Exit");
+  return items.join(" │ ");
+}
+
+/** Listens for SIGINT and calls onExit. */
 function InkKeys({ onExit }: { onExit: () => void }): null {
-  // Ink handles ctrl+c via render({exitOnCtrlC:true}) but keep explicit exit hook.
   useEffect(() => {
     const handler = () => onExit();
     process.on("SIGINT", handler);
@@ -776,6 +1039,7 @@ function InkKeys({ onExit }: { onExit: () => void }): null {
   return null;
 }
 
+/** Listens for Esc (cancel) and SIGINT (exit) inside modals. */
 function InkModalKeys({ onCancel, onExit }: { onCancel: () => void; onExit: () => void }): null {
   useEffect(() => {
     const handler = () => onExit();
@@ -784,63 +1048,87 @@ function InkModalKeys({ onCancel, onExit }: { onCancel: () => void; onExit: () =
       process.off("SIGINT", handler);
     };
   }, [onExit]);
-  // Use Ink's useInput instead of raw stdin.on('data') so we don't fight with raw mode
-  useInput((_, key) => {
+  useInput((input, key) => {
     if (key.escape) onCancel();
+    if (key.ctrl && (input === "c" || input === "\x03")) onExit();
   });
   return null;
 }
 
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Full-screen modal views
+ * ────────────────────────────────────────────────────────────────────────── */
+
 function FullOutputModal({ text, onClose }: { text: string; onClose: () => void }) {
   const [offset, setOffset] = useState(0);
   const lines = text.split(/\r?\n/);
-  const maxLines = (process.stdout.rows ?? 24) - 4; // leave room for header/footer
+  const maxLines = (process.stdout.rows ?? 24) - 4;
 
   useInput((input, key) => {
     if (key.upArrow) setOffset((o) => Math.max(0, o - 1));
     else if (key.downArrow) setOffset((o) => Math.min(Math.max(0, lines.length - maxLines), o + 1));
-    else if (key.escape || (key.ctrl && input === "o")) onClose();
+    else if (key.pageUp) setOffset((o) => Math.max(0, o - Math.floor(maxLines / 2)));
+    else if (key.pageDown) setOffset((o) => Math.min(Math.max(0, lines.length - maxLines), o + Math.floor(maxLines / 2)));
+    else if (key.escape || (key.ctrl && (input === "o" || input === "\x0f"))) onClose();
   });
 
   const visibleLines = lines.slice(offset, offset + maxLines);
 
   return (
-    <Box flexDirection="column" height={process.stdout.rows ?? undefined} padding={1} borderStyle="double" borderColor="cyan">
-      <Text color="cyan" bold>Expanded Output ({lines.length} lines)</Text>
+    <Box
+      flexDirection="column"
+      height={process.stdout.rows ?? undefined}
+      padding={1}
+      borderStyle="double"
+      borderColor={THEME.activeBorder}
+    >
+      <Text color={THEME.activeBorder} bold>
+        Expanded Output ({lines.length} lines)
+      </Text>
       <Box flexGrow={1} flexDirection="column" marginTop={1}>
         {visibleLines.map((l, i) => (
           <Text key={i}>{l}</Text>
         ))}
       </Box>
       <Box marginTop={1}>
-        <Text color="gray">Use Up/Down to scroll • Esc or Ctrl+O to close</Text>
+        <Text color={THEME.muted}>Up/Down / PgUp/PgDn to scroll • Esc or ^O to close</Text>
       </Box>
     </Box>
   );
 }
 
 function FullTranscriptModal({ transcript, onClose }: { transcript: string[]; onClose: () => void }) {
-  const maxLines = (process.stdout.rows ?? 24) - 4; // leave room for header/footer
+  const maxLines = (process.stdout.rows ?? 24) - 4;
   const [offset, setOffset] = useState(() => Math.max(0, transcript.length - maxLines));
 
   useInput((input, key) => {
     if (key.upArrow) setOffset((o) => Math.max(0, o - 1));
     else if (key.downArrow) setOffset((o) => Math.min(Math.max(0, transcript.length - maxLines), o + 1));
-    else if (key.escape || (key.ctrl && input === "t")) onClose();
+    else if (key.pageUp) setOffset((o) => Math.max(0, o - Math.floor(maxLines / 2)));
+    else if (key.pageDown) setOffset((o) => Math.min(Math.max(0, transcript.length - maxLines), o + Math.floor(maxLines / 2)));
+    else if (key.escape || (key.ctrl && (input === "t" || input === "\x14"))) onClose();
   });
 
   const visibleLines = transcript.slice(offset, offset + maxLines);
 
   return (
-    <Box flexDirection="column" height={process.stdout.rows ?? undefined} padding={1} borderStyle="double" borderColor="magenta">
-      <Text color="magenta" bold>Full Transcript ({transcript.length} lines)</Text>
+    <Box
+      flexDirection="column"
+      height={process.stdout.rows ?? undefined}
+      padding={1}
+      borderStyle="double"
+      borderColor={THEME.header}
+    >
+      <Text color={THEME.header} bold>
+        Full Transcript ({transcript.length} lines)
+      </Text>
       <Box flexGrow={1} flexDirection="column" marginTop={1}>
         {visibleLines.map((l, i) => (
           <Text key={i}>{l}</Text>
         ))}
       </Box>
       <Box marginTop={1}>
-        <Text color="gray">Use Up/Down to scroll • Esc or Ctrl+T to close</Text>
+        <Text color={THEME.muted}>Up/Down / PgUp/PgDn to scroll • Esc or ^T to close</Text>
       </Box>
     </Box>
   );

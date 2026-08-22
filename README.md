@@ -1,6 +1,6 @@
 # yoof1337
 
-Terminal-based coding agent: an LLM in a tool-use loop that can read/write files, run shell commands, and search code inside a sandboxed working directory, with human-in-the-loop guardrails for anything that mutates state.
+Terminal-based coding agent: an LLM in a tool-use loop that can read/write files, run shell commands, and search code inside a sandboxed working directory, with human-in-the-loop guardrails for anything that mutates state and a split-pane terminal dashboard.
 
 ## Setup
 
@@ -9,13 +9,13 @@ npm install
 npm run build
 ```
 
-Set your API key via environment variable (never committed):
+Set your API key via environment variable:
 
 ```sh
 export OPENAI_API_KEY=sk-...
 ```
 
-Or put it in a local `.env` file (also never committed):
+Or put it in a local `.env` file (ignored by Git):
 
 ```ini
 OPENAI_API_KEY=sk-...
@@ -25,17 +25,32 @@ OPENAI_API_KEY=sk-...
 
 ```sh
 node dist/cli/index.js [--dir <sandbox-path>] [--provider openai|llamacpp] [-a untrusted|on-request|never] [--yolo] [--tui]
-# or during development:
-npm run dev
 ```
 
-- `--dir` -- the working-directory sandbox. All file operations and commands are scoped here; paths that resolve outside it are rejected.
-- `--provider` -- which block of `config.json` to use. `openai` (gpt-4o-mini, testing phase) or `llamacpp` (self-hosted Qwen3.5-35B-A3B via llama.cpp's OpenAI-compatible server). Swapping providers is config only -- base URL + model name -- thanks to the adapter layer in `src/llm/`.
-- `-a, --ask-for-approval` -- approval policy for mutating tool calls: `on-request` (default), `untrusted`, `never`.
-- `--yolo` -- explicit opt-in to auto-approve every tool call, including `write_file` and `run_command`. Off by default; without it, each mutating call shows you exactly what will run/change and asks for confirmation. `read_file`, `list_directory`, and `search_code` are always auto-approved.
-- `--tui` -- opt in to the interactive Ink TUI (panels / folding). By default the agent runs in a plain line-based REPL for maximum terminal compatibility.
+- `--dir` -- The working-directory sandbox. All file operations and commands are scoped here; paths that resolve outside it are rejected.
+- `--provider` -- Which block of `config.json` to use. `openai` (e.g. `gpt-4o-mini`, `gpt-4o`) or `llamacpp` (self-hosted Qwen3.5-35B-A3B via llama.cpp's OpenAI-compatible server). Swapping providers is config only -- base URL + model name -- thanks to the adapter layer in `src/llm/`.
+- `-a, --ask-for-approval` -- Approval policy for mutating tool calls: `on-request` (default), `untrusted`, `never`.
+- `--yolo` -- Explicit opt-in to auto-approve every tool call, including `write_file` and `run_command`. Off by default; without it, each mutating call shows you exactly what will run/change and asks for confirmation. `read_file`, `list_directory`, and `search_code` are always auto-approved.
+- `--tui` -- Opt in to the interactive Ink TUI dashboard (split-pane transcript + status/tools panel). By default the agent runs in a plain line-based REPL for maximum terminal compatibility.
 
-In-session commands: `/compact` (summarize + shrink history), `/state` (world-state tracker + token estimate), `/help`, `/exit`.
+In-session slash commands: `/compact` (summarize + shrink history), `/state` (world-state tracker + token estimate), `/sessions`, `/resume`, `/save`, `/help`, `/exit`.
+
+## Terminal Dashboard (TUI)
+
+When launched with `--tui`, `yoof1337` renders a dual-pane dashboard with a curated 256-color palette:
+
+- **Split-Pane Layout**: Scrollable conversation transcript on the left, status and tool execution history on the right.
+- **Collapsible Sidebar**: Press `Ctrl+B` to collapse or expand the info panel. On narrow terminals (< 80 columns), it automatically falls back to a clean single-column layout.
+- **Hotkey Legend & Navigation**:
+  - `Ctrl+B` -- Toggle sidebar panel
+  - `Ctrl+O` -- Open full-screen expanded output modal
+  - `Ctrl+T` -- Open full-screen transcript modal
+  - `PgUp` / `PgDn` -- Scroll transcript viewport
+  - `Shift+Up` / `Shift+Down` -- Scroll viewport 1 line
+  - `Tab` / `Right Arrow` -- Autocomplete slash commands
+  - `Ctrl+A` / `Ctrl+E` -- Jump to start / end of input line
+  - `Ctrl+U` / `Ctrl+K` -- Clear whole line / to end of line
+  - `Ctrl+C` -- Quit session
 
 ## Features
 
@@ -51,8 +66,14 @@ The agent respects a `config.json` or `yoof1337.json` file in the working direct
 
 ```json
 {
-  "provider": "llamacpp",
+  "provider": "openai",
   "providers": {
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "contextWindow": 128000
+    },
     "llamacpp": {
       "baseUrl": "http://localhost:8080/v1",
       "model": "qwen3.5-35b-a3b",
@@ -79,38 +100,22 @@ Defense layers, weakest to strongest:
 2. **Permission prompts** -- every `run_command`/`write_file` requires explicit approval unless `--yolo`.
 3. **Path sandbox** -- all file tools resolve paths against `--dir` and reject escapes.
 4. **Container mode (opt-in)** -- run with `--docker` to execute `run_command` inside Docker for better isolation.
-5. **Recommended: containerize the whole agent** -- for real isolation, run the entire CLI inside Docker, e.g.:
+5. **Recommended: containerize the whole agent** -- for real isolation, run the entire CLI inside Docker:
 
 ```sh
 docker run -it --rm -v "$PWD:/work" -w /work node:22 bash -c "npm ci && npm run build && node dist/cli/index.js --dir /work"
 ```
 
-## llama.cpp / GPU migration
-
-Serve the GGUF model with llama.cpp's OpenAI-compatible server on the GPU box:
-
-```sh
-llama-server -m qwen3.5-35b-a3b-q8_0.gguf --port 8080 -c 131072 --jinja
-```
-
-Then either set `"provider": "llamacpp"` in `config.json` or pass `--provider llamacpp`, and point `providers.llamacpp.baseUrl` at the instance. No code changes.
-
-## Test
-
-```sh
-npm run smoke
-```
-
-Runs the compiled agent loop offline against a scripted fake LLM client -- verifies a full tool-call cycle, error surfacing, the denylist, and sandbox escapes, with no API key needed.
-
 ## Layout
 
 ```
 src/
-├── llm/          client.ts (provider-agnostic interface), openai.ts, factory.ts
+├── llm/          client.ts (provider-agnostic interface), openai.ts, llamacpp.ts, factory.ts
 ├── tools/        definitions.ts (schemas + registry), one file per tool, sandbox.ts
 ├── tasks/        coordinator.ts, taskStore.ts, teamManager.ts, workerProcess.ts
 ├── loop/         agentLoop.ts, compaction.ts, state.ts (world-state tracker)
 ├── permissions/  guardrails.ts
-└── cli/          index.ts (entry point / REPL), inkUi.tsx, tui.ts
+├── hooks/        useViewport.ts
+├── components/   AnsiLog.tsx, OverlayModal.tsx
+└── cli/          index.ts (entry point / REPL), inkUi.tsx (split-pane dashboard), markdown.ts, ui.ts
 ```
