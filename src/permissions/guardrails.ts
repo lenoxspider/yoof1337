@@ -108,26 +108,10 @@ export async function requestPermission(
     if (isAllowed) return { approved: true, input: finalInput };
   }
 
-  // Stage 3.5: Policy heuristics (Codex-like)
-  if (policy === "on-request") {
-    // In this project, the model cannot explicitly "request" approval, so we interpret
-    // on-request as: auto-approve sandboxed file mutations, but still gate shell commands
-    // unless they match known-safe prefixes.
-    if (toolName === "write_file" || toolName === "apply_patch") {
-      return { approved: true, input: finalInput };
-    }
-    if (isCommandTool(toolName) && typeof finalInput.command === "string") {
-      const prefix = commandSimilarityPrefix(finalInput.command);
-      if (prefix && isTrustedCommandPrefix(prefix)) return { approved: true, input: finalInput };
-    }
-  }
-
-  if (policy === "untrusted") {
-    // In untrusted mode, auto-approve only a small set of known read-only command prefixes.
-    if (isCommandTool(toolName) && typeof finalInput.command === "string") {
-      const prefix = commandSimilarityPrefix(finalInput.command);
-      if (prefix && isTrustedCommandPrefix(prefix)) return { approved: true, input: finalInput };
-    }
+  // Stage 3.5: Gating heuristics
+  if (isCommandTool(toolName) && typeof finalInput.command === "string") {
+    const prefix = commandSimilarityPrefix(finalInput.command);
+    if (prefix && isTrustedCommandPrefix(prefix)) return { approved: true, input: finalInput };
   }
 
   const ownRl: Questioner =
@@ -193,19 +177,35 @@ function describe(toolName: string, input: Record<string, unknown>): string[] {
   if (toolName === "write_file") {
     const content = String(input.content ?? "");
     const lines = content.split("\n");
-    const preview = lines.slice(0, 20).map((l) => `  ${l}`);
-    if (lines.length > 20) preview.push(`  ... (${lines.length - 20} more lines)`);
+    const preview = lines.slice(0, 15).map((l) => `  ${l}`);
+    if (lines.length > 15) preview.push(`  ... (${lines.length - 15} more lines)`);
     return [
-      `file: ${String(input.path ?? "")}`,
+      `create file: ${String(input.path ?? "")}`,
       `content (${Buffer.byteLength(content, "utf8")} bytes):`,
       ...preview,
     ];
   }
+  if (toolName === "edit_file") {
+    return [
+      `edit file: ${String(input.path ?? "")}`,
+      `replace:\n  ${String(input.old_string ?? "").slice(0, 200)}`,
+      `with:\n  ${String(input.new_string ?? "").slice(0, 200)}`,
+    ];
+  }
+  if (toolName === "delete_file") {
+    return [`delete file: ${String(input.path ?? "")}`];
+  }
+  if (toolName === "move_file") {
+    return [`move: ${String(input.source ?? "")} -> ${String(input.destination ?? "")}`];
+  }
+  if (toolName === "copy_file") {
+    return [`copy: ${String(input.source ?? "")} -> ${String(input.destination ?? "")}`];
+  }
   if (toolName === "apply_patch") {
     const patch = String(input.patch ?? "");
     const lines = patch.split("\n");
-    const preview = lines.slice(0, 60).map((l) => `  ${l}`);
-    if (lines.length > 60) preview.push(`  ... (${lines.length - 60} more lines)`);
+    const preview = lines.slice(0, 40).map((l) => `  ${l}`);
+    if (lines.length > 40) preview.push(`  ... (${lines.length - 40} more lines)`);
     return [`patch (${Buffer.byteLength(patch, "utf8")} bytes):`, ...preview];
   }
   return [`input: ${JSON.stringify(input)}`];
