@@ -1,72 +1,166 @@
 # yoof1337
 
-Terminal-based coding agent: an LLM in a tool-use loop that can read/write files, run shell commands, and search code inside a sandboxed working directory, with human-in-the-loop guardrails for anything that mutates state and a split-pane terminal dashboard.
+A terminal-first, sandboxed autonomous AI coding agent designed for local open models (via `llama.cpp`) and frontier cloud APIs (OpenAI). 
 
-## Setup
+Features human-in-the-loop permission guardrails, real-time token streaming, rich 256-color syntax highlighting, dynamic on-demand tool loading, multi-agent orchestration, and a dual-pane terminal TUI dashboard.
 
-```sh
+---
+
+## ⚡ Quick Start
+
+### 1. Installation
+
+```bash
+git clone https://github.com/lenoxspider/yoof1337.git
+cd yoof1337
 npm install
 npm run build
 ```
 
+### 2. Configuration & API Key
+
 Set your API key via environment variable:
 
-```sh
+```bash
 export OPENAI_API_KEY=sk-...
 ```
 
-Or put it in a local `.env` file (ignored by Git):
+Or configure a local `.env` file:
 
 ```ini
 OPENAI_API_KEY=sk-...
 ```
 
-## Run
+For self-hosted local models on a rented GPU box, run the 1-click bootstrap script:
 
-```sh
-node dist/cli/index.js [--dir <sandbox-path>] [--provider openai|llamacpp] [-a untrusted|on-request|never] [--yolo] [--tui]
+```bash
+chmod +x scripts/setup-gpu.sh
+./scripts/setup-gpu.sh
 ```
 
-- `--dir` -- The working-directory sandbox. All file operations and commands are scoped here; paths that resolve outside it are rejected.
-- `--provider` -- Which block of `config.json` to use. `openai` (e.g. `gpt-4o-mini`, `gpt-4o`) or `llamacpp` (self-hosted Qwen3.5-35B-A3B via llama.cpp's OpenAI-compatible server). Swapping providers is config only -- base URL + model name -- thanks to the adapter layer in `src/llm/`.
-- `-a, --ask-for-approval` -- Approval policy for mutating tool calls: `on-request` (default), `untrusted`, `never`.
-- `--yolo` -- Explicit opt-in to auto-approve every tool call, including `write_file` and `run_command`. Off by default; without it, each mutating call shows you exactly what will run/change and asks for confirmation. `read_file`, `list_directory`, and `search_code` are always auto-approved.
-- `--tui` -- Opt in to the interactive Ink TUI dashboard (split-pane transcript + status/tools panel). By default the agent runs in a plain line-based REPL for maximum terminal compatibility.
+---
 
-In-session slash commands: `/compact` (summarize + shrink history), `/state` (world-state tracker + token estimate), `/sessions`, `/resume`, `/save`, `/help`, `/exit`.
+## 🚀 Running the Agent
 
-## Terminal Dashboard (TUI)
+```bash
+# Launch interactive TUI in current directory
+node dist/cli/index.js --tui
 
-When launched with `--tui`, `yoof1337` renders a dual-pane dashboard with a curated 256-color palette:
+# Launch with a specific provider (e.g. local llama.cpp)
+node dist/cli/index.js --tui --provider llamacpp
 
-- **Split-Pane Layout**: Scrollable conversation transcript on the left, status and tool execution history on the right.
-- **Collapsible Sidebar**: Press `Ctrl+B` to collapse or expand the info panel. On narrow terminals (< 80 columns), it automatically falls back to a clean single-column layout.
-- **Hotkey Legend & Navigation**:
-  - `Ctrl+B` -- Toggle sidebar panel
-  - `Ctrl+O` -- Open full-screen expanded output modal
-  - `Ctrl+T` -- Open full-screen transcript modal
-  - `PgUp` / `PgDn` -- Scroll transcript viewport
-  - `Shift+Up` / `Shift+Down` -- Scroll viewport 1 line
-  - `Tab` / `Right Arrow` -- Autocomplete slash commands
-  - `Ctrl+A` / `Ctrl+E` -- Jump to start / end of input line
-  - `Ctrl+U` / `Ctrl+K` -- Clear whole line / to end of line
-  - `Ctrl+C` -- Quit session
+# Run in an isolated sandbox directory with YOLO (auto-approve) mode
+node dist/cli/index.js --tui --dir /path/to/project --yolo
+```
 
-## Features
+### CLI Flags
 
-- **Prompt Queue:** In-session interactive prompt queueing allowing for rapid commands while agent is processing.
-- **Web Tools:** Integrated `web_search` and `web_fetch` capabilities.
-- **Autonomous Subagents:** Spawn isolated concurrent subagents on isolated git worktrees via the Job Board Coordinator. Subagents have distinct short-term memories preventing context bloat.
-- **Intel on Demand:** Drop markdown context into `.yoof1337-mem` for on-demand knowledge injection (`intel_day`).
-- **Persistent Tasks:** Tasks and subagent states are backed to `.yoof1337-tasks.json` allowing for session resumes and dependency graphing.
+| Flag | Description |
+| :--- | :--- |
+| **`--dir <path>`** | Sets the sandbox working directory. All file tools and terminal commands are strictly confined here. |
+| **`--provider <name>`** | Selects the provider block from `config.json` (e.g. `openai`, `llamacpp`). |
+| **`--tui`** | Launches the rich Ink TUI dashboard (split-pane transcript + status/tools panel). |
+| **`--plain`** | Forces plain line-based REPL mode for basic terminals or CI environments. |
+| **`--yolo`** | Auto-approves all tool calls (including file writes and shell execution). |
+| **`-a, --ask-for-approval`** | Approval policy: `on-request` (default), `untrusted`, `never`. |
+| **`--resume <id>`** | Resumes an existing session by ID from `.yoof1337-sessions/`. |
+| **`--continue`** | Automatically resumes the most recent session in the current directory. |
+| **`--docker`** | Executes all shell commands inside an isolated Docker container. |
 
-## Configuration
+---
 
-The agent respects a `config.json` or `yoof1337.json` file in the working directory. Here you can change default settings and define LLM generation properties.
+## 🖥️ Terminal Dashboard (TUI) & Ergonomics
+
+When launched with `--tui`, `yoof1337` renders a dual-pane terminal interface:
+
+* **Dual-Pane Interface:** Scrollable transcript on the left; live status, token gauges, and tool output history on the right.
+* **Live Token Streaming:** Responses stream word-by-word with instant typing feedback.
+* **Syntax Highlighting:** 256-color ANSI syntax highlighting for TypeScript, JavaScript, Python, JSON, Bash, and Unified Git Diffs (`+` green, `-` red, `@@` cyan).
+* **Mouse Wheel & Keyboard Scrolling:**
+  - **Mouse Wheel Up / Down:** Scroll transcript viewport smoothly.
+  - **`PgUp` / `PgDn`**: Page scroll through conversation history.
+  - **`Shift+Up` / `Shift+Down`**: Line-by-line fine scrolling.
+  - **`Ctrl+B`**: Toggle collapsible sidebar panel.
+  - **`Ctrl+O`**: Expand folded tool output in full-screen modal.
+  - **`Ctrl+T`**: View full-screen transcript modal.
+
+---
+
+## 💡 Core Features
+
+### 1. `@` File Context Tagging
+Mention any file in your prompt using `@` to instantly load its contents into the turn context:
+```text
+you> Refactor the error handling in @src/tools/definitions.ts
+```
+*Saves an extra `read_file` round-trip and provides instant responses.*
+
+### 2. Lean Core Tools & On-Demand Activation
+* **Default Lean Tools (~8 core tools):** `read_file`, `write_file`, `edit_file`, `list_directory`, `search_code`, `run_command`, `request_tools`, `note_decision`.
+* **On-Demand Categories:** The agent or user dynamically activates tool groups as needed (`git`, `gh`, `files`, `tasks`, `web`, `mcp`, `custom`, `all`).
+* **Auto-Reset on Compaction:** Specialized tools automatically reset back to lean defaults when history is compacted to prevent schema bloat.
+
+### 3. Open Model Parser Fallback (llama.cpp / Qwen / DeepSeek)
+If your open model streams `<tool_call>` XML tags or markdown JSON blocks into plain text, `yoof1337`'s regex fallback engine extracts the tool call and arguments seamlessly without stalling.
+
+### 4. Session Permission Auto-Allow Rules
+When prompted for confirmation on mutating actions (`run_command`, `write_file`, `edit_file`, `delete_file`):
+* **`[y]` (Once):** Approves this specific execution.
+* **`[a]` (Always / Session Rule):** Approves and remembers rules for the session (e.g. auto-allowing all commands starting with `npm test`, `git`, or all edits in the workspace folder).
+* **`[n]` (Deny):** Rejects the action.
+
+### 5. Repository Custom Instructions (`AGENTS.md`)
+`yoof1337` automatically detects and injects project rules from:
+- `AGENTS.md`
+- `CLAUDE.md`
+- `.cursorrules`
+- `.yoof1337/system_prompt.md`
+
+Use `/prompt reload` to refresh instructions on the fly without restarting.
+
+### 6. Dynamic Custom Tool Creation
+Define and register new custom tools at runtime:
+```json
+create_tool({
+  "name": "generate_uuid",
+  "description": "Generate a random UUID v4",
+  "input_schema": { "type": "object", "properties": {} }
+})
+```
+Custom tools persist across sessions in `.yoof1337/custom-tools.json`.
+
+---
+
+## ⌨️ In-Session Slash Commands
+
+Type `/` in the prompt to open the autocomplete menu:
+
+| Command | Description |
+| :--- | :--- |
+| **`/stats`** | View token throughput (**tokens/sec**), session totals, and cost analytics. |
+| **`/tools`** | List active/inactive tool categories (`/tools reset`, `/tools activate <cat>`, `/tools deactivate <cat>`). |
+| **`/prompt`** | View active system prompt and custom instructions (`/prompt reload` to refresh). |
+| **`/health`** | Ping the active LLM endpoint and verify model connectivity. |
+| **`/tree`** | Display a visual directory tree of the workspace. |
+| **`/compact`** | Summarize and compact conversation history to free context space. |
+| **`/state`** | Display tracked world-state (touched files, executed commands, decisions ledger). |
+| **`/tasks`** | List background sub-agents and active orchestration tasks. |
+| **`/model`** | Show active provider/model and context window limit. |
+| **`/undo` / `/redo`** | Step backward or forward across automatic Git checkpoints. |
+| **`/status` / `/diff`** | Quick git status and unified diff preview. |
+| **`/clear`** | Clear the transcript viewport. |
+| **`/reset`** | Start a fresh conversation session. |
+| **`/exit`** | Quit session safely. |
+
+---
+
+## ⚙️ Configuration (`config.json`)
+
+Configure your LLM endpoints in `config.json`:
 
 ```json
 {
-  "provider": "openai",
+  "provider": "llamacpp",
   "providers": {
     "openai": {
       "baseUrl": "https://api.openai.com/v1",
@@ -84,38 +178,54 @@ The agent respects a `config.json` or `yoof1337.json` file in the working direct
       "min_p": 0,
       "presence_penalty": 0
     }
+  },
+  "compaction": {
+    "thresholdRatio": 0.75,
+    "keepLastMessages": 4
   }
 }
 ```
 
-## Context compaction
+---
 
-When the estimated history size passes `compaction.thresholdRatio` (default 0.75) of the provider's context window, the agent auto-compacts: the LLM summarizes the history (preserving decisions, file states, unresolved tasks), and the log is rebuilt as `[system prompt, original task verbatim, summary, last N messages verbatim]`. The system prompt and original task are never summarized. A separate world-state tracker (files touched, commands run) lives outside the message log, so compaction is never the only record of what happened.
+## 🧠 Multi-Agent Orchestration
 
-## Sandboxing notes
+`yoof1337` can spawn background sub-agents and teams for complex workflows:
+* **`agent_run`**: Spawns an asynchronous sub-agent with a custom persona/system prompt on an isolated Git worktree.
+* **`task_create` / `task_get` / `task_output`**: Tracks background task queues with dependency graphing.
+* **`team_create`**: Coordinates multi-agent teams with shared system instructions.
 
-Defense layers, weakest to strongest:
+---
 
-1. **Denylist** (`src/tools/runCommand.ts`) -- blocks obviously destructive patterns (`rm -rf /`, fork bombs, device writes). A safety net only.
-2. **Permission prompts** -- every `run_command`/`write_file` requires explicit approval unless `--yolo`.
-3. **Path sandbox** -- all file tools resolve paths against `--dir` and reject escapes.
-4. **Container mode (opt-in)** -- run with `--docker` to execute `run_command` inside Docker for better isolation.
-5. **Recommended: containerize the whole agent** -- for real isolation, run the entire CLI inside Docker:
+## 🛡️ Sandbox & Security Layers
 
-```sh
-docker run -it --rm -v "$PWD:/work" -w /work node:22 bash -c "npm ci && npm run build && node dist/cli/index.js --dir /work"
+1. **Denylist Protection**: Blocks destructive root operations (`rm -rf /`, raw disk writes, fork bombs).
+2. **Strict Path Sandbox**: Resolves all file operations relative to `--dir` and rejects traversal escapes (`../`).
+3. **Session Permissions**: Human-in-the-loop approval on all file mutations and shell executions.
+4. **Docker Containerization (Optional)**: Execute commands inside isolated containers via `--docker`.
+
+---
+
+## 📁 Repository Layout
+
+```
+yoof1337/
+├── src/
+│   ├── cli/             # Entry point, Ink TUI dashboard, syntax highlighting, file tagger, markdown
+│   ├── config/          # Configuration and AGENTS.md prompt loader
+│   ├── llm/             # Provider-agnostic LLM interface, OpenAI/llama.cpp clients, streaming
+│   ├── loop/            # Agent loop, compaction engine, world-state tracker
+│   ├── permissions/     # Human-in-the-loop guardrails & session auto-allow rules
+│   ├── tasks/           # Multi-agent coordinator, task store, team manager, worker processes
+│   └── tools/           # Tool registry, lean definitions, sandboxing, dynamic tools
+├── scripts/
+│   ├── setup-gpu.sh     # 1-click CUDA/llama.cpp bootstrap script for rented GPUs
+│   └── provision-tools.sh # Environment provisioning for custom tools
+└── config.json          # Provider configurations & hyperparameters
 ```
 
-## Layout
+---
 
-```
-src/
-├── llm/          client.ts (provider-agnostic interface), openai.ts, llamacpp.ts, factory.ts
-├── tools/        definitions.ts (schemas + registry), one file per tool, sandbox.ts
-├── tasks/        coordinator.ts, taskStore.ts, teamManager.ts, workerProcess.ts
-├── loop/         agentLoop.ts, compaction.ts, state.ts (world-state tracker)
-├── permissions/  guardrails.ts
-├── hooks/        useViewport.ts
-├── components/   AnsiLog.tsx, OverlayModal.tsx
-└── cli/          index.ts (entry point / REPL), inkUi.tsx (split-pane dashboard), markdown.ts, ui.ts
-```
+## 📄 License
+
+MIT © [lenoxspider](https://github.com/lenoxspider)
