@@ -1,4 +1,5 @@
-import type { LlmClient } from "../llm/client.js";
+import type { LlmClient, ChatMessage } from "../llm/client.js";
+import { estimateTokens } from "../llm/client.js";
 import type { AgentConfig } from "../config.js";
 import { execa } from "execa";
 import type { SandboxContext } from "../tools/sandbox.js";
@@ -133,6 +134,8 @@ export async function runTurn(
       await compact(state, client, config.compaction, { cwdForRepoSnapshot: sandbox.root, sessionLogger: io.sessionLogger });
     }
 
+    pruneOversizedMessages(state.messages, Math.floor(client.contextWindow * 0.85));
+
     let response;
     try {
       io.onLlmStart?.(iteration === 0 ? "thinking" : "thinking");
@@ -228,9 +231,15 @@ export async function runTurn(
         if (formatted) io.print(formatted);
         io.onToolEnd?.(call.name, result, true, dt);
       }
-      state.messages.push({ role: "tool", toolCallId: call.id, content: result });
+      const maxStoredResultChars = 40_000;
+      const storedResult =
+        typeof result === "string" && result.length > maxStoredResultChars
+          ? result.slice(0, maxStoredResultChars) + `\n\n[Stored output truncated: ${result.length} characters total]`
+          : result;
+
+      state.messages.push({ role: "tool", toolCallId: call.id, content: storedResult });
       if (io.sessionLogger) {
-        io.sessionLogger.logAsync({ type: "tool", toolCallId: call.id, content: result });
+        io.sessionLogger.logAsync({ type: "tool", toolCallId: call.id, content: storedResult });
         io.sessionLogger.logAsync({ type: "progress", world: state.world });
       }
 
@@ -320,3 +329,16 @@ function truncateBlock(s: string, maxChars: number, maxLines: number): string {
   if (out.length > maxChars) out = out.slice(0, maxChars) + `\n[truncated: ${out.length - maxChars} chars more]`;
   return out || "(empty)";
 }
+
+function pruneOversizedMessages(messages: ChatMessage[], maxTokens: number): void {
+  if (estimateTokens(messages) <= maxTokens) return;
+  // Truncate oldest tool results first
+  for (let i = 1; i < messages.length - 2; i++) {
+    const m = messages[i];
+    if (m.role === "tool" && typeof m.content === "string" && m.content.length > 500) {
+      m.content = m.content.slice(0, 500) + "\n\n[Earlier tool output pruned to stay within context limit]";
+      if (estimateTokens(messages) <= maxTokens) return;
+    }
+  }
+}
+

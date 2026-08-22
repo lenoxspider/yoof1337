@@ -114,6 +114,7 @@ export async function compact(
   let tailStart = Math.max(1, history.length - cfg.keepLastMessages);
   while (tailStart < history.length && history[tailStart].role === "tool") tailStart++;
   const tail = history.slice(tailStart);
+  const maxTranscriptChars = Math.max(10000, Math.floor(client.contextWindow * 0.6 * 3.5));
 
   const transcript = history
     .slice(1, tailStart) // skip system prompt; tail is kept verbatim anyway
@@ -122,21 +123,41 @@ export async function compact(
         const calls = m.toolCalls.map((tc) => `${tc.name}(${JSON.stringify(tc.input)})`).join(", ");
         return `assistant: ${m.content ?? ""} [tool calls: ${calls}]`;
       }
-      if (m.role === "tool") return `tool result: ${m.content}`;
+      if (m.role === "tool") {
+        const text = String(m.content ?? "");
+        const shortText = text.length > 800 ? text.slice(0, 800) + "... [truncated]" : text;
+        return `tool result: ${shortText}`;
+      }
       return `${m.role}: ${m.content}`;
     })
-    .join("\n---\n");
+    .join("\n---\n")
+    .slice(-maxTranscriptChars);
 
-  const response = await client.chat(
-    [
-      { role: "system", content: SUMMARIZE_INSTRUCTION },
-      {
-        role: "user",
-        content: `Known world state (tracked separately, already reliable):\n${worldStateSummary(state.world)}\n\nRepo snapshot (best-effort):\n${await getRepoSnapshot(opts?.cwdForRepoSnapshot)}\n\nConversation to summarize:\n${transcript}`,
-      },
-    ],
-    [] // no tools for the summarization call
-  );
+  let response;
+  try {
+    response = await client.chat(
+      [
+        { role: "system", content: SUMMARIZE_INSTRUCTION },
+        {
+          role: "user",
+          content: `Known world state (tracked separately, already reliable):\n${worldStateSummary(state.world)}\n\nRepo snapshot (best-effort):\n${await getRepoSnapshot(opts?.cwdForRepoSnapshot)}\n\nConversation to summarize:\n${transcript}`,
+        },
+      ],
+      [] // no tools for the summarization call
+    );
+  } catch (err) {
+    // If summarization call still fails (e.g. provider context limit), fallback to world state summary
+    response = {
+      text: JSON.stringify({
+        objective: state.world.memory.objective || "Continue task",
+        summary: `Prior context compacted. World state: ${worldStateSummary(state.world)}`,
+        decisions: state.world.memory.decisions,
+        open_questions: state.world.memory.openQuestions,
+        next_steps: state.world.memory.nextSteps,
+      }),
+      toolCalls: [],
+    };
+  }
   const raw = response.text ?? "";
   const parsed = parseCompactionJson(raw);
   const summary = parsed?.summary || raw || "(summarization returned no text)";
