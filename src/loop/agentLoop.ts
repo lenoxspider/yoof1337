@@ -292,8 +292,12 @@ export async function runTurn(
 }
 
 function trackWorldState(state: AgentState, toolName: string, input: Record<string, unknown>): void {
-  if (toolName === "write_file" && typeof input.path === "string") {
+  if ((toolName === "write_file" || toolName === "edit_file" || toolName === "delete_file") && typeof input.path === "string") {
     state.world.filesTouched.add(input.path);
+  }
+  if (toolName === "move_file" || toolName === "copy_file") {
+    if (typeof input.source === "string") state.world.filesTouched.add(input.source);
+    if (typeof input.destination === "string") state.world.filesTouched.add(input.destination);
   }
   if (toolName === "run_command" && typeof input.command === "string") {
     state.world.commandsRun.push(input.command);

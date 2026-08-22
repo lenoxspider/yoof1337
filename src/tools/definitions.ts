@@ -31,6 +31,10 @@ import {
 import { runCommandBg } from "./runCommandBg.js";
 import { checkCommand } from "./checkCommand.js";
 import { killCommand } from "./killCommand.js";
+import { deleteFile } from "./deleteFile.js";
+import { moveFile } from "./moveFile.js";
+import { copyFile } from "./copyFile.js";
+import { treeDirectory } from "./treeDirectory.js";
 
 type Executor = (input: Record<string, unknown>, ctx: SandboxContext) => Promise<string>;
 
@@ -175,6 +179,71 @@ export const TOOLS: Record<string, RegisteredTool> = {
       },
     },
     execute: (input, ctx) => listDirectory(input as { path?: string }, ctx),
+  },
+  tree_directory: {
+    mutating: false,
+    definition: {
+      name: "tree_directory",
+      description: "Show a recursive visual directory tree (up to maxDepth, default: 3). Respects .gitignore.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Directory path relative to the working directory (default: .)" },
+          maxDepth: { type: "number", description: "Maximum recursion depth (default: 3, max: 6)" },
+        },
+      },
+    },
+    execute: (input, ctx) => treeDirectory(input as { path?: string; maxDepth?: number }, ctx),
+  },
+  delete_file: {
+    mutating: true,
+    definition: {
+      name: "delete_file",
+      description: "Delete a file or directory in the working directory. For directories, pass recursive: true.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to file or directory to delete" },
+          recursive: { type: "boolean", description: "Set to true to delete directories recursively" },
+        },
+        required: ["path"],
+      },
+    },
+    execute: (input, ctx) => deleteFile(input as { path: string; recursive?: boolean }, ctx),
+  },
+  move_file: {
+    mutating: true,
+    definition: {
+      name: "move_file",
+      description: "Move or rename a file or directory within the working directory.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          source: { type: "string", description: "Source file or directory path" },
+          destination: { type: "string", description: "Destination file or directory path" },
+          overwrite: { type: "boolean", description: "Overwrite destination if it already exists" },
+        },
+        required: ["source", "destination"],
+      },
+    },
+    execute: (input, ctx) => moveFile(input as { source: string; destination: string; overwrite?: boolean }, ctx),
+  },
+  copy_file: {
+    mutating: true,
+    definition: {
+      name: "copy_file",
+      description: "Copy a file or directory within the working directory.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          source: { type: "string", description: "Source file or directory path" },
+          destination: { type: "string", description: "Destination file or directory path" },
+          overwrite: { type: "boolean", description: "Overwrite destination if it already exists" },
+        },
+        required: ["source", "destination"],
+      },
+    },
+    execute: (input, ctx) => copyFile(input as { source: string; destination: string; overwrite?: boolean }, ctx),
   },
   run_command: {
     mutating: true,
@@ -1063,7 +1132,11 @@ const CORE_TOOLS = new Set([
   "read_file_excerpt",
   "write_file",
   "edit_file",
+  "delete_file",
+  "move_file",
+  "copy_file",
   "list_directory",
+  "tree_directory",
   "run_command",
   "search_code",
   "glob_files",
