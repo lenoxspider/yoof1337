@@ -138,6 +138,7 @@ Type `/` in the prompt to open the autocomplete menu:
 | Command | Description |
 | :--- | :--- |
 | **`/stats`** | View token throughput (**tokens/sec**), session totals, and cost analytics. |
+| **`/permission`** | Change permission mode (`/permission strict`, `/permission auto`, `/permission reset`). |
 | **`/tools`** | List active/inactive tool categories (`/tools reset`, `/tools activate <cat>`, `/tools deactivate <cat>`). |
 | **`/prompt`** | View active system prompt and custom instructions (`/prompt reload` to refresh). |
 | **`/health`** | Ping the active LLM endpoint and verify model connectivity. |
