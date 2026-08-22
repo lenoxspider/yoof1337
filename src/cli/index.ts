@@ -23,6 +23,7 @@ import { taskStore } from "../tasks/taskStore.js";
 import { registry } from "../tools/registry.js";
 import { treeDirectory } from "../tools/treeDirectory.js";
 import { loadCustomTools } from "../tools/dynamicTools.js";
+import { loadWorkspaceInstructions, type LoadedInstructions } from "../config/promptLoader.js";
 import {
   applyStoredSession,
   defaultSessionsDir,
@@ -49,18 +50,25 @@ For complex multi-step projects, consider breaking work into parallel tasks assi
 
 When the task is complete, reply with a concise final summary instead of calling more tools.`;
 
-function buildSystemPrompt(providerName: string): string {
-  if (providerName !== "llamacpp") return SYSTEM_PROMPT;
-  const names = toolDefinitions().map((t) => t.name).sort();
-  return (
-    SYSTEM_PROMPT +
-    `\n\nIMPORTANT TOOL-CALLING RULES (llama.cpp):\n` +
-    `- You may ONLY request tools from this exact allowlist:\n` +
-    `${names.map((n) => `  - ${n}`).join("\n")}\n` +
-    `- Never invent tool names. If no tool fits, ask a clarifying question or respond normally.\n` +
-    `- If you need to read a file, prefer read_file_excerpt for large files.\n` +
-    `- After you get the needed tool result(s), stop calling tools and produce the final answer.`
-  );
+function buildSystemPrompt(providerName: string, customInstructions?: LoadedInstructions | null): string {
+  let prompt = SYSTEM_PROMPT;
+
+  if (customInstructions) {
+    prompt += `\n\n## CUSTOM REPOSITORY INSTRUCTIONS (Loaded from ${customInstructions.filename}):\n${customInstructions.content}\n`;
+  }
+
+  if (providerName === "llamacpp") {
+    const names = toolDefinitions().map((t) => t.name).sort();
+    prompt +=
+      `\n\nIMPORTANT TOOL-CALLING RULES (llama.cpp):\n` +
+      `- You may ONLY request tools from this exact allowlist:\n` +
+      `${names.map((n) => `  - ${n}`).join("\n")}\n` +
+      `- Never invent tool names. If no tool fits, ask a clarifying question or respond normally.\n` +
+      `- If you need to read a file, prefer read_file_excerpt for large files.\n` +
+      `- After you get the needed tool result(s), stop calling tools and produce the final answer.`;
+  }
+
+  return prompt;
 }
 
 interface CliArgs {
@@ -156,7 +164,7 @@ async function initSessionLogger(
   providerName: string, 
   client: ReturnType<typeof createClient>, 
   sandboxRoot: string
-): Promise<{ state: AgentState; logger: SessionLogger }> {
+): Promise<{ state: AgentState; logger: SessionLogger; instructions: LoadedInstructions | null }> {
   // Initialize MCP servers in the background
   mcpManager.initialize().catch(err => {
     console.error("Failed to initialize MCP servers:", err);
@@ -165,7 +173,8 @@ async function initSessionLogger(
   const { taskStore } = await import("../tasks/taskStore.js");
   taskStore.init(sandboxRoot);
 
-  let state = createAgentState(buildSystemPrompt(providerName));
+  const instructions = await loadWorkspaceInstructions(sandboxRoot);
+  let state = createAgentState(buildSystemPrompt(providerName, instructions));
   let baseId = args.resume;
   
   if (args.continue && !baseId) {
@@ -198,11 +207,11 @@ async function initSessionLogger(
           else if (msg.role === "tool") logger.logAsync({ type: "tool", toolCallId: msg.toolCallId ?? "", content: msg.content ?? "" });
         }
         logger.logAsync({ type: "progress", world: state.world });
-        return { state, logger };
+        return { state, logger, instructions };
       } else {
         state.sessionId = stored.meta.id;
         const logger = new SessionLogger(sessionsDir, state.sessionId);
-        return { state, logger };
+        return { state, logger, instructions };
       }
     } catch (err) {
       console.log(color(`resume failed: ${err instanceof Error ? err.message : String(err)}`, ansi.red));
@@ -223,7 +232,7 @@ async function initSessionLogger(
     sandboxRoot,
     title: "untitled",
   });
-  return { state, logger };
+  return { state, logger, instructions };
 }
 
 async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
@@ -232,7 +241,7 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const providerName = args.provider ?? config.provider;
   const client = createClient(config, args.provider);
   const sessionsDir = path.resolve(args.sessionsDir ?? defaultSessionsDir());
-  const { state, logger } = await initSessionLogger(args, sessionsDir, providerName, client, sandbox.root);
+  const { state, logger, instructions } = await initSessionLogger(args, sessionsDir, providerName, client, sandbox.root);
 
   const persist = async (): Promise<void> => {
     await logger.flush();
@@ -241,6 +250,7 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const customToolCount = await loadCustomTools(sandbox.root);
 
   console.log(`yoof1337 -- model: ${client.model} | sandbox: ${sandbox.root}`);
+  if (instructions) console.log(color(`✓ Loaded custom instructions from: ${instructions.filename}`, ansi.green));
   if (dotenv.loaded) console.log(color(`loaded env: ${dotenv.path}`, ansi.dim));
   console.log(color(`session: ${state.sessionId} (${sessionsDir})`, ansi.dim));
   if (args.yolo) console.log(color("! yolo mode: all tool calls auto-approved", ansi.yellow));
@@ -391,6 +401,28 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       console.log(treeOut);
       continue;
     }
+    if (line === "/prompt" || line.startsWith("/prompt ")) {
+      const parts = line.split(/\s+/);
+      const sub = parts[1]?.toLowerCase();
+      if (sub === "reload") {
+        const fresh = await loadWorkspaceInstructions(sandbox.root);
+        state.systemPrompt = buildSystemPrompt(providerName, fresh);
+        if (state.messages.length > 0 && state.messages[0].role === "system") {
+          state.messages[0].content = state.systemPrompt;
+        }
+        if (fresh) {
+          console.log(color(`✓ Reloaded custom instructions from: ${fresh.filename}`, ansi.green));
+        } else {
+          console.log(color("No custom instruction files found in workspace root.", ansi.yellow));
+        }
+      } else {
+        console.log(color("\n--- Active System Prompt ---", ansi.bold));
+        console.log(state.systemPrompt);
+        console.log(color("\nTip: Place an AGENTS.md, CLAUDE.md, or .yoof1337/system_prompt.md in your project root.", ansi.dim));
+        console.log(color("Use '/prompt reload' to refresh instructions after editing.", ansi.dim));
+      }
+      continue;
+    }
     if (line === "/model") {
       console.log(`Active Provider: ${providerName} | Model: ${client.model} | Context: ${client.contextWindow} tokens`);
       console.log(`Available in config: ${Object.keys(config.providers).join(", ")}`);
@@ -398,7 +430,7 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     }
     if (line === "/help") {
       console.log(
-        `${color("/clear", ansi.cyan)}    clear the console log\n${color("/reset", ansi.cyan)}    start a fresh conversation\n${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/health", ansi.cyan)}   ping model endpoint health\n${color("/tasks", ansi.cyan)}    list background sub-agents and tasks\n${color("/tools", ansi.cyan)}    list all registered tools\n${color("/tree", ansi.cyan)}     print visual directory tree\n${color("/model", ansi.cyan)}    show active model and available providers\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session snapshot\n${color("/undo", ansi.cyan)}     rollback to last git checkpoint\n${color("/redo", ansi.cyan)}     step forward one git checkpoint\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
+        `${color("/clear", ansi.cyan)}    clear the console log\n${color("/reset", ansi.cyan)}    start a fresh conversation\n${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/health", ansi.cyan)}   ping model endpoint health\n${color("/tasks", ansi.cyan)}    list background sub-agents and tasks\n${color("/tools", ansi.cyan)}    list all registered tools\n${color("/tree", ansi.cyan)}     print visual directory tree\n${color("/prompt", ansi.cyan)}   view or reload custom instructions (AGENTS.md)\n${color("/model", ansi.cyan)}    show active model and available providers\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session snapshot\n${color("/undo", ansi.cyan)}     rollback to last git checkpoint\n${color("/redo", ansi.cyan)}     step forward one git checkpoint\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
       );
       continue;
     }
@@ -509,7 +541,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const providerName = args.provider ?? config.provider;
   const client = createClient(config, args.provider);
   const sessionsDir = path.resolve(args.sessionsDir ?? defaultSessionsDir());
-  const { state, logger } = await initSessionLogger(args, sessionsDir, providerName, client, sandbox.root);
+  const { state, logger, instructions } = await initSessionLogger(args, sessionsDir, providerName, client, sandbox.root);
 
   const app: {
     start: () => void;
@@ -530,6 +562,9 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   }) as any;
   await loadCustomTools(sandbox.root);
   app.start();
+  if (instructions) {
+    app.println(color(`✓ Loaded custom instructions from: ${instructions.filename}`, ansi.green));
+  }
   if (client.checkHealth) {
     client.checkHealth().then((h) => {
       if (h.ok) app.println(color(`✓ Endpoint online: ${h.message}`, ansi.green));
@@ -814,6 +849,28 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         app.println(treeOut);
         continue;
       }
+      if (line === "/prompt" || line.startsWith("/prompt ")) {
+        const parts = line.split(/\s+/);
+        const sub = parts[1]?.toLowerCase();
+        if (sub === "reload") {
+          const fresh = await loadWorkspaceInstructions(sandbox.root);
+          state.systemPrompt = buildSystemPrompt(providerName, fresh);
+          if (state.messages.length > 0 && state.messages[0].role === "system") {
+            state.messages[0].content = state.systemPrompt;
+          }
+          if (fresh) {
+            app.println(color(`✓ Reloaded custom instructions from: ${fresh.filename}`, ansi.green));
+          } else {
+            app.println(color("No custom instruction files found in workspace root.", ansi.yellow));
+          }
+        } else {
+          app.println(color("--- Active System Prompt ---", ansi.bold));
+          app.println(state.systemPrompt);
+          app.println(color("Tip: Place an AGENTS.md, CLAUDE.md, or .yoof1337/system_prompt.md in your project root.", ansi.dim));
+          app.println(color("Use '/prompt reload' to refresh instructions after editing.", ansi.dim));
+        }
+        continue;
+      }
       if (line === "/model") {
         app.println(`Active Provider: ${providerName} | Model: ${client.model} | Context: ${client.contextWindow} tokens`);
         app.println(`Available in config: ${Object.keys(config.providers).join(", ")}`);
@@ -828,6 +885,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         app.println(`${color("/tasks", ansi.cyan)}    list background sub-agents and tasks`);
         app.println(`${color("/tools", ansi.cyan)}    list all registered tools`);
         app.println(`${color("/tree", ansi.cyan)}     print visual directory tree`);
+        app.println(`${color("/prompt", ansi.cyan)}   view or reload custom instructions (AGENTS.md)`);
         app.println(`${color("/model", ansi.cyan)}    show active model and available providers`);
         app.println(`${color("/sessions", ansi.cyan)} list saved sessions`);
         app.println(`${color("/resume <id>", ansi.cyan)} resume a saved session`);

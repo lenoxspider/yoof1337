@@ -60,6 +60,7 @@ const SLASH_COMMANDS = [
   { cmd: "/tasks", desc: "list background sub-agents & tasks" },
   { cmd: "/tools", desc: "list all registered tools" },
   { cmd: "/tree", desc: "print visual directory tree" },
+  { cmd: "/prompt", desc: "view or reload custom instructions" },
   { cmd: "/model", desc: "show or switch active model/provider" },
   { cmd: "/sessions", desc: "list saved sessions" },
   { cmd: "/resume", desc: "resume a saved session" },
