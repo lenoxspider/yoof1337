@@ -256,6 +256,7 @@ type StoreSnapshot = {
   busy: null | { activity: string; startedAt: number; detail?: string };
   pastePreview: string[] | null;
   sidebarVisible: boolean;
+  permissionMode: "strict" | "auto";
 };
 
 /* ──────────────────────────────────────────────────────────────────────────────
@@ -292,6 +293,7 @@ class InkStore {
       busy: null,
       pastePreview: null,
       sidebarVisible: true,
+      permissionMode: "strict",
     };
   }
 
@@ -385,6 +387,11 @@ class InkStore {
 
   toggleSidebar(): void {
     this.snapshot = { ...this.snapshot, sidebarVisible: !this.snapshot.sidebarVisible };
+    this.emit();
+  }
+
+  setPermissionMode(mode: "strict" | "auto"): void {
+    this.snapshot = { ...this.snapshot, permissionMode: mode };
     this.emit();
   }
 
@@ -650,6 +657,7 @@ export type InkUi = {
   setStatusline: (text: string) => void;
   setTools: (lines: string[]) => void;
   setLastFoldedOutput?: (output: string | null) => void;
+  setPermissionMode: (mode: "strict" | "auto") => void;
   readLine: (promptLabel?: string) => Promise<string | null>;
   createQuestioner: () => Questioner;
   onSigInt: (handler: () => void) => void;
@@ -758,6 +766,7 @@ export function createInkUi(opts: { title: string; subtitle: string; sandboxRoot
     setStatusline: (t: string) => store.setStatusline(t),
     setTools: (t: string[]) => store.setTools(t),
     setLastFoldedOutput: (t: string | null) => store.setLastFoldedOutput(t),
+    setPermissionMode: (m: "strict" | "auto") => store.setPermissionMode(m),
     readLine: async (promptLabel = "you> ") => {
       try {
         return await store.readLine(promptLabel);
@@ -959,6 +968,12 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
         <Text color={THEME.header} bold>◆ {snap.header} </Text>
         <Text color={THEME.border}>│ </Text>
         <Text backgroundColor="#1c3b2b" color={THEME.success} bold> ● ONLINE </Text>
+        <Text color={THEME.border}> │ </Text>
+        {snap.permissionMode === "auto" ? (
+          <Text backgroundColor="#3d2b1a" color="#ffaf5f" bold> ⚡ AUTO </Text>
+        ) : (
+          <Text backgroundColor="#1a2d3d" color="#5fd7ff" bold> 🛡️ STRICT </Text>
+        )}
         <Text color={THEME.border}> │ </Text>
         <Text color={THEME.subtitle} bold>{snap.subtitle}</Text>
       </Box>

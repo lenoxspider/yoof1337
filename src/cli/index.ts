@@ -644,11 +644,13 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     onSigInt?: (handler: () => void) => void;
     streamChunk?: (chunk: string) => void;
     endStream?: () => void;
+    setPermissionMode?: (mode: "strict" | "auto") => void;
   } = createInkUi({
     title: "yoof1337",
     subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
     sandboxRoot: sandbox.root,
   }) as any;
+  app.setPermissionMode?.(args.yolo ? "auto" : "strict");
   await loadCustomTools(sandbox.root);
   app.start();
   if (instructions) {
@@ -967,10 +969,12 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         if (mode === "auto" || mode === "yolo" || mode === "never") {
           permissions.yolo = true;
           permissions.approvalPolicy = "never";
+          app.setPermissionMode?.("auto");
           app.println(color("✓ Permission mode set to AUTO (all mutations auto-approved)", ansi.green));
         } else if (mode === "strict" || mode === "prompt" || mode === "untrusted") {
           permissions.yolo = false;
           permissions.approvalPolicy = "untrusted";
+          app.setPermissionMode?.("strict");
           app.println(color("✓ Permission mode set to STRICT (confirmation required for all mutations)", ansi.yellow));
         } else if (mode === "reset") {
           if (permissions.rules) permissions.rules.alwaysAllow = [];
