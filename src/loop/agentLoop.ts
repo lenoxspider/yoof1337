@@ -63,6 +63,7 @@ export interface LoopIO {
   rl?: Questioner;
   /** Optional output formatter (e.g., markdown renderer). */
   format?: (text: string) => string;
+  onToken?: (token: string) => void;
   onToolStart?: (toolName: string, input: Record<string, unknown>) => void;
   onToolEnd?: (toolName: string, result: string, approved: boolean, durationMs: number) => void;
   /** Optional formatter for tool results printed to the transcript. */
@@ -139,7 +140,16 @@ export async function runTurn(
     let response;
     try {
       io.onLlmStart?.(iteration === 0 ? "thinking" : "thinking");
-      response = await client.chat(state.messages, registry.getActiveDefinitions(), io.abortSignal);
+      if (client.chatStream && io.onToken) {
+        response = await client.chatStream(
+          state.messages,
+          registry.getActiveDefinitions(),
+          io.onToken,
+          io.abortSignal
+        );
+      } else {
+        response = await client.chat(state.messages, registry.getActiveDefinitions(), io.abortSignal);
+      }
       tallies.llmCalls++;
       if (response.usage) {
         tallies.hasUsage = true;
@@ -166,7 +176,9 @@ export async function runTurn(
       state.messages.push({ role: "assistant", content: response.text ?? "" });
       if (io.sessionLogger) io.sessionLogger.logAsync({ type: "assistant", content: response.text ?? "" });
       const out = response.text ?? "(no response text)";
-      io.print(io.format ? io.format(out) : out);
+      if (!io.onToken) {
+        io.print(io.format ? io.format(out) : out);
+      }
       io.onTurnEnd?.(progress());
       return;
     }

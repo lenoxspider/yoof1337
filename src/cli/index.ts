@@ -24,6 +24,7 @@ import { registry } from "../tools/registry.js";
 import { treeDirectory } from "../tools/treeDirectory.js";
 import { loadCustomTools } from "../tools/dynamicTools.js";
 import { loadWorkspaceInstructions, type LoadedInstructions } from "../config/promptLoader.js";
+import { expandFileTags } from "./fileTagger.js";
 import {
   applyStoredSession,
   defaultSessionsDir,
@@ -269,7 +270,43 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     allowCommandPrefixes: state.world.permissions.allowCommandPrefixes,
     rules: { alwaysAllow: [], alwaysDeny: [], alwaysAsk: [] },
   };
-  const io = { print: (t: string) => console.log(t), rl, format: renderMarkdownToPlain, sessionLogger: logger };
+  const stats = {
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalLlmCalls: 0,
+    totalToolCalls: 0,
+    totalGenerationTimeMs: 0,
+  };
+  let plainStreaming = false;
+  const io = {
+    print: (t: string) => {
+      if (plainStreaming) {
+        process.stdout.write("\n");
+        plainStreaming = false;
+      }
+      console.log(t);
+    },
+    onToken: (token: string) => {
+      plainStreaming = true;
+      process.stdout.write(token);
+    },
+    rl,
+    format: renderMarkdownToPlain,
+    sessionLogger: logger,
+    onTurnEnd: (p: any) => {
+      if (plainStreaming) {
+        process.stdout.write("\n");
+        plainStreaming = false;
+      }
+      if (p) {
+        stats.totalPromptTokens += p.promptTokens ?? 0;
+        stats.totalCompletionTokens += p.completionTokens ?? 0;
+        stats.totalLlmCalls += p.llmCalls ?? 0;
+        stats.totalToolCalls += p.toolCalls ?? 0;
+        stats.totalGenerationTimeMs += p.elapsedMs ?? 0;
+      }
+    },
+  };
 
   async function cmdStatus(): Promise<void> {
     try {
@@ -423,6 +460,24 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       }
       continue;
     }
+    if (line === "/stats") {
+      const elapsedSec = Math.max(0.1, stats.totalGenerationTimeMs / 1000);
+      const speed = (stats.totalCompletionTokens / elapsedSec).toFixed(1);
+      const totalTokens = stats.totalPromptTokens + stats.totalCompletionTokens;
+      const isLocal = providerName === "llamacpp" || client.baseUrl?.includes("localhost") || client.baseUrl?.includes("127.0.0.1");
+      const estCost = isLocal ? "$0.00 (local GPU)" : `$${((stats.totalPromptTokens * 0.0015 + stats.totalCompletionTokens * 0.002) / 1000).toFixed(4)}`;
+
+      console.log(color("\n📊 Session Performance & Token Analytics", ansi.bold));
+      console.log(`  • Generation Speed:    ${color(`${speed} tok/s`, ansi.green)}`);
+      console.log(`  • Total Generated:     ${stats.totalCompletionTokens.toLocaleString()} tokens`);
+      console.log(`  • Total Prompt Tokens: ${stats.totalPromptTokens.toLocaleString()} tokens`);
+      console.log(`  • Total Combined:      ${totalTokens.toLocaleString()} tokens`);
+      console.log(`  • LLM Round-Trips:     ${stats.totalLlmCalls}`);
+      console.log(`  • Tool Invocations:    ${stats.totalToolCalls}`);
+      console.log(`  • Context Window:      ${client.contextWindow.toLocaleString()} tokens`);
+      console.log(`  • Estimated Cost:      ${color(estCost, ansi.yellow)}\n`);
+      continue;
+    }
     if (line === "/model") {
       console.log(`Active Provider: ${providerName} | Model: ${client.model} | Context: ${client.contextWindow} tokens`);
       console.log(`Available in config: ${Object.keys(config.providers).join(", ")}`);
@@ -430,7 +485,7 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     }
     if (line === "/help") {
       console.log(
-        `${color("/clear", ansi.cyan)}    clear the console log\n${color("/reset", ansi.cyan)}    start a fresh conversation\n${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/health", ansi.cyan)}   ping model endpoint health\n${color("/tasks", ansi.cyan)}    list background sub-agents and tasks\n${color("/tools", ansi.cyan)}    list all registered tools\n${color("/tree", ansi.cyan)}     print visual directory tree\n${color("/prompt", ansi.cyan)}   view or reload custom instructions (AGENTS.md)\n${color("/model", ansi.cyan)}    show active model and available providers\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session snapshot\n${color("/undo", ansi.cyan)}     rollback to last git checkpoint\n${color("/redo", ansi.cyan)}     step forward one git checkpoint\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
+        `${color("/clear", ansi.cyan)}    clear the console log\n${color("/reset", ansi.cyan)}    start a fresh conversation\n${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/health", ansi.cyan)}   ping model endpoint health\n${color("/stats", ansi.cyan)}    view token speed and session stats\n${color("/tasks", ansi.cyan)}    list background sub-agents and tasks\n${color("/tools", ansi.cyan)}    list all registered tools\n${color("/tree", ansi.cyan)}     print visual directory tree\n${color("/prompt", ansi.cyan)}   view or reload custom instructions (AGENTS.md)\n${color("/model", ansi.cyan)}    show active model and available providers\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session snapshot\n${color("/undo", ansi.cyan)}     rollback to last git checkpoint\n${color("/redo", ansi.cyan)}     step forward one git checkpoint\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
       );
       continue;
     }
@@ -523,7 +578,11 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       continue;
     }
 
-    await runTurn(state, line, client, config, sandbox, permissions, io);
+    const tagged = await expandFileTags(line, sandbox);
+    if (tagged.attachedFiles.length > 0) {
+      console.log(color(`📎 Attached file context: ${tagged.attachedFiles.join(", ")}`, ansi.cyan));
+    }
+    await runTurn(state, tagged.expandedText, client, config, sandbox, permissions, io);
     try {
       await logger.flush();
     } catch {
@@ -548,14 +607,16 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     stop: () => void;
     println: (t: string) => void;
     clear?: () => void;
-    setStatusline?: (t: string) => void;
     setStatus?: (t: string) => void;
+    setStatusline?: (t: string) => void;
     setTools?: (lines: string[]) => void;
     setBusy?: (busy: null | { activity: string; startedAt: number; detail?: string }) => void;
     setLastFoldedOutput?: (output: string | null) => void;
     readLine: (promptLabel?: string) => Promise<string | null>;
     createQuestioner: () => any;
     onSigInt?: (handler: () => void) => void;
+    streamChunk?: (chunk: string) => void;
+    endStream?: () => void;
   } = createInkUi({
     title: "◆ yoof1337",
     subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
@@ -578,29 +639,29 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     allowCommandPrefixes: state.world.permissions.allowCommandPrefixes,
     rules: { alwaysAllow: [], alwaysDeny: [], alwaysAsk: [] },
   };
+  const tuiStats = {
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalLlmCalls: 0,
+    totalToolCalls: 0,
+    totalGenerationTimeMs: 0,
+  };
   let turnStartedAt = Date.now();
-  // Most recent real prompt-token count reported by the server (true context fill).
-  // 0 until the first usage report; the statusline falls back to the estimate.
   let lastContextTokens = 0;
   const io = {
     print: (t: string) => app.println(t),
+    onToken: (token: string) => {
+      if (app.streamChunk) app.streamChunk(token);
+    },
     rl: questioner,
     format: renderMarkdownToPlain,
+    formatToolResult: (_name: string, result: string) => result,
     sessionLogger: logger,
-    formatToolResult: (toolName: string, result: string) => "", // Handled in onToolEnd instead
     onTurnStart: () => {
       turnStartedAt = Date.now();
-      app.setBusy?.({ activity: "Thinking", startedAt: turnStartedAt });
     },
     onLlmStart: (activity: string) => {
-      app.setBusy?.({ activity: activity === "thinking" ? "Thinking" : activity, startedAt: turnStartedAt });
-    },
-    onLlmEnd: (p: TurnProgress) => {
-      if (p.hasUsage && p.contextTokens > 0) {
-        lastContextTokens = p.contextTokens;
-        void refreshStatusline();
-      }
-      app.setBusy?.({ activity: "Working", startedAt: turnStartedAt, detail: progressDetail(p) });
+      app.setBusy?.({ activity, startedAt: Date.now() });
     },
     onProgress: (activity: string, p: TurnProgress) => {
       app.setBusy?.({ activity, startedAt: turnStartedAt, detail: progressDetail(p) });
@@ -871,6 +932,24 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         }
         continue;
       }
+      if (line === "/stats") {
+        const elapsedSec = Math.max(0.1, tuiStats.totalGenerationTimeMs / 1000);
+        const speed = (tuiStats.totalCompletionTokens / elapsedSec).toFixed(1);
+        const totalTokens = tuiStats.totalPromptTokens + tuiStats.totalCompletionTokens;
+        const isLocal = providerName === "llamacpp" || client.baseUrl?.includes("localhost") || client.baseUrl?.includes("127.0.0.1");
+        const estCost = isLocal ? "$0.00 (local GPU)" : `$${((tuiStats.totalPromptTokens * 0.0015 + tuiStats.totalCompletionTokens * 0.002) / 1000).toFixed(4)}`;
+
+        app.println(color("📊 Session Performance & Token Analytics", ansi.bold));
+        app.println(`  • Generation Speed:    ${color(`${speed} tok/s`, ansi.green)}`);
+        app.println(`  • Total Generated:     ${tuiStats.totalCompletionTokens.toLocaleString()} tokens`);
+        app.println(`  • Total Prompt Tokens: ${tuiStats.totalPromptTokens.toLocaleString()} tokens`);
+        app.println(`  • Total Combined:      ${totalTokens.toLocaleString()} tokens`);
+        app.println(`  • LLM Round-Trips:     ${tuiStats.totalLlmCalls}`);
+        app.println(`  • Tool Invocations:    ${tuiStats.totalToolCalls}`);
+        app.println(`  • Context Window:      ${client.contextWindow.toLocaleString()} tokens`);
+        app.println(`  • Estimated Cost:      ${color(estCost, ansi.yellow)}`);
+        continue;
+      }
       if (line === "/model") {
         app.println(`Active Provider: ${providerName} | Model: ${client.model} | Context: ${client.contextWindow} tokens`);
         app.println(`Available in config: ${Object.keys(config.providers).join(", ")}`);
@@ -882,6 +961,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         app.println(`${color("/compact", ansi.cyan)}  summarize and shrink the conversation history`);
         app.println(`${color("/state", ansi.cyan)}    show tracked world state and token estimate`);
         app.println(`${color("/health", ansi.cyan)}   ping model endpoint health`);
+        app.println(`${color("/stats", ansi.cyan)}    view token speed and session stats`);
         app.println(`${color("/tasks", ansi.cyan)}    list background sub-agents and tasks`);
         app.println(`${color("/tools", ansi.cyan)}    list all registered tools`);
         app.println(`${color("/tree", ansi.cyan)}     print visual directory tree`);
@@ -1011,7 +1091,11 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       abortController = new AbortController();
       turnRunning = true;
       const turnIo = { ...io, abortSignal: abortController.signal };
-      await runTurn(state, line, client, config, sandbox, permissions, turnIo);
+      const tagged = await expandFileTags(line, sandbox);
+      if (tagged.attachedFiles.length > 0) {
+        app.println(color(`📎 Attached file context: ${tagged.attachedFiles.join(", ")}`, ansi.cyan));
+      }
+      await runTurn(state, tagged.expandedText, client, config, sandbox, permissions, turnIo);
       turnRunning = false;
       abortController = null;
       app.onSigInt?.(() => { app.stop(); process.exit(0); }); // reset to exit

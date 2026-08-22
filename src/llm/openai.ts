@@ -147,6 +147,144 @@ export class OpenAiCompatibleClient implements LlmClient {
 
     return { text: assistantContent, toolCalls, usage };
   }
+
+  async chatStream(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onChunk: (chunk: string) => void,
+    abortSignal?: AbortSignal
+  ): Promise<LlmResponse> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: messages.map(toWireMessage),
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    if (this.providerOpts.temperature !== undefined) body.temperature = this.providerOpts.temperature;
+    if (this.providerOpts.top_p !== undefined) body.top_p = this.providerOpts.top_p;
+    if (this.providerOpts.top_k !== undefined) body.top_k = this.providerOpts.top_k;
+    if (this.providerOpts.min_p !== undefined) body.min_p = this.providerOpts.min_p;
+    if (this.providerOpts.presence_penalty !== undefined) body.presence_penalty = this.providerOpts.presence_penalty;
+    if (tools.length > 0) {
+      const useStrict = this.providerOpts.strictToolSchemas ?? false;
+      body.tools = tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: useStrict ? toStrictSchema(t.inputSchema) : t.inputSchema,
+          ...(useStrict ? { strict: true } : {}),
+        },
+      }));
+      const toolChoice = this.providerOpts.toolChoice ?? "auto";
+      body.tool_choice = toolChoice;
+    }
+
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: abortSignal,
+      });
+    } catch {
+      // Fallback to non-streaming if network error
+      return this.chat(messages, tools, abortSignal);
+    }
+
+    if (!res.ok || !res.body) {
+      return this.chat(messages, tools, abortSignal);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let accumulatedContent = "";
+    const rawToolCalls: Record<number, { id?: string; name?: string; arguments: string }> = {};
+    let finalUsage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith(":") || trimmed === "data: [DONE]") continue;
+          if (trimmed.startsWith("data: ")) {
+            const jsonStr = trimmed.slice(6);
+            try {
+              const chunk = JSON.parse(jsonStr);
+              const choice = chunk.choices?.[0];
+              const delta = choice?.delta;
+
+              if (delta?.content) {
+                accumulatedContent += delta.content;
+                onChunk(delta.content);
+              }
+
+              if (delta?.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0;
+                  if (!rawToolCalls[idx]) {
+                    rawToolCalls[idx] = { id: tc.id, name: tc.function?.name ?? "", arguments: "" };
+                  }
+                  if (tc.id) rawToolCalls[idx].id = tc.id;
+                  if (tc.function?.name) rawToolCalls[idx].name = tc.function.name;
+                  if (tc.function?.arguments) rawToolCalls[idx].arguments += tc.function.arguments;
+                }
+              }
+
+              if (chunk.usage) {
+                finalUsage = {
+                  promptTokens: chunk.usage.prompt_tokens ?? 0,
+                  completionTokens: chunk.usage.completion_tokens ?? 0,
+                  totalTokens: chunk.usage.total_tokens ?? 0,
+                };
+              }
+            } catch {
+              // Ignore chunk parse errors
+            }
+          }
+        }
+      }
+    } catch {
+      if (accumulatedContent.length === 0 && Object.keys(rawToolCalls).length === 0) {
+        return this.chat(messages, tools, abortSignal);
+      }
+    }
+
+    let toolCalls: ToolCallRequest[] = Object.values(rawToolCalls).map((tc, i) => ({
+      id: tc.id ?? `call_${i}`,
+      name: tc.name ?? "",
+      input: safeParseJson(tc.arguments || "{}"),
+    }));
+
+    let assistantContent = accumulatedContent || null;
+
+    // Fallback extraction for open models
+    if (toolCalls.length === 0 && typeof assistantContent === "string" && assistantContent.trim()) {
+      const extracted = extractToolCallsFromText(assistantContent);
+      if (extracted.toolCalls.length > 0) {
+        toolCalls = extracted.toolCalls;
+        assistantContent = extracted.cleanedText || null;
+      }
+    }
+
+    return {
+      text: assistantContent,
+      toolCalls,
+      usage: finalUsage,
+    };
+  }
 }
 
 function toWireMessage(m: ChatMessage): Record<string, unknown> {

@@ -61,6 +61,7 @@ const SLASH_COMMANDS = [
   { cmd: "/tools", desc: "list all registered tools" },
   { cmd: "/tree", desc: "print visual directory tree" },
   { cmd: "/prompt", desc: "view or reload custom instructions" },
+  { cmd: "/stats", desc: "view token speed & session analytics" },
   { cmd: "/model", desc: "show or switch active model/provider" },
   { cmd: "/sessions", desc: "list saved sessions" },
   { cmd: "/resume", desc: "resume a saved session" },
@@ -303,16 +304,34 @@ class InkStore {
     for (const fn of this.listeners) fn();
   }
 
-  /* ── Output ────────────────────────────────────────────────────────────── */
+  private isStreaming = false;
 
   println(text: string): void {
+    this.isStreaming = false;
     const next = [...this.snapshot.transcript];
     for (const l of String(text ?? "").split(/\r?\n/)) next.push(l);
     this.snapshot = { ...this.snapshot, transcript: next };
     this.emit();
   }
 
+  streamChunk(chunk: string): void {
+    const next = [...this.snapshot.transcript];
+    if (next.length === 0 || !this.isStreaming) {
+      next.push(chunk);
+      this.isStreaming = true;
+    } else {
+      next[next.length - 1] += chunk;
+    }
+    this.snapshot = { ...this.snapshot, transcript: next.slice(-500) };
+    this.emit();
+  }
+
+  endStream(): void {
+    this.isStreaming = false;
+  }
+
   clearTranscript(): void {
+    this.isStreaming = false;
     this.snapshot = { ...this.snapshot, transcript: [] };
     this.emit();
   }
@@ -586,6 +605,8 @@ export type InkUi = {
   start: () => void;
   stop: () => void;
   println: (text: string) => void;
+  streamChunk: (chunk: string) => void;
+  endStream: () => void;
   clear: () => void;
   setStatus: (text: string) => void;
   setBusy: (busy: null | { activity: string; startedAt: number; detail?: string }) => void;
@@ -638,6 +659,8 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
       unmount = null;
     },
     println: (t: string) => store.println(t),
+    streamChunk: (t: string) => store.streamChunk(t),
+    endStream: () => store.endStream(),
     clear: () => store.clearTranscript(),
     setStatus: (t: string) => store.setStatus(t),
     setBusy: (b) => store.setBusy(b),

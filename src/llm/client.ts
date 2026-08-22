@@ -47,6 +47,12 @@ export interface LlmClient {
   readonly contextWindow: number;
   readonly baseUrl?: string;
   chat(messages: ChatMessage[], tools: ToolDefinition[], abortSignal?: AbortSignal): Promise<LlmResponse>;
+  chatStream?(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onChunk: (chunk: string) => void,
+    abortSignal?: AbortSignal
+  ): Promise<LlmResponse>;
   checkHealth?(): Promise<{ ok: boolean; message: string; models?: string[] }>;
 }
 
