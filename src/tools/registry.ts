@@ -21,6 +21,10 @@ export class ToolRegistry {
     this.tools.set(tool.definition.name, tool);
   }
 
+  unregister(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
   setTier(name: string, tier: ToolTier): void {
     const tool = this.tools.get(name);
     if (tool) tool.tier = tier;

@@ -35,6 +35,7 @@ import { deleteFile } from "./deleteFile.js";
 import { moveFile } from "./moveFile.js";
 import { copyFile } from "./copyFile.js";
 import { treeDirectory } from "./treeDirectory.js";
+import { createTool, updateTool, listTools, deleteTool } from "./dynamicTools.js";
 
 type Executor = (input: Record<string, unknown>, ctx: SandboxContext) => Promise<string>;
 
@@ -244,6 +245,68 @@ export const TOOLS: Record<string, RegisteredTool> = {
       },
     },
     execute: (input, ctx) => copyFile(input as { source: string; destination: string; overwrite?: boolean }, ctx),
+  },
+  create_tool: {
+    mutating: true,
+    definition: {
+      name: "create_tool",
+      description: "Create a new custom tool definition with dynamic JSON schema and command template.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Unique tool name (e.g. run_linter)" },
+          description: { type: "string", description: "Tool description for the LLM" },
+          inputSchema: { type: "object", description: "JSON schema for the input parameters" },
+          commandTemplate: { type: "string", description: "Shell command template with {{var}} substitutions (e.g. 'npm test -- {{testName}}')" },
+          mutating: { type: "boolean", description: "Whether this tool requires approval in strict mode" },
+        },
+        required: ["name", "commandTemplate"],
+      },
+    },
+    execute: (input, ctx) => createTool(input as any, ctx),
+  },
+  update_tool: {
+    mutating: true,
+    definition: {
+      name: "update_tool",
+      description: "Update an existing custom dynamic tool definition.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name of the custom tool to update" },
+          updates: { type: "object", description: "Fields to update (description, inputSchema, commandTemplate, mutating)" },
+        },
+        required: ["name", "updates"],
+      },
+    },
+    execute: (input, ctx) => updateTool(input as any, ctx),
+  },
+  list_tools: {
+    mutating: false,
+    definition: {
+      name: "list_tools",
+      description: "List all registered tool definitions and schemas as structured JSON.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    execute: (input, ctx) => listTools(input as any, ctx),
+  },
+  delete_tool: {
+    mutating: true,
+    definition: {
+      name: "delete_tool",
+      description: "Delete a custom dynamic tool definition.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name of the custom tool to delete" },
+        },
+        required: ["name"],
+      },
+    },
+    execute: (input, ctx) => deleteTool(input as any, ctx),
   },
   run_command: {
     mutating: true,
@@ -1148,6 +1211,10 @@ const CORE_TOOLS = new Set([
   "note_decision",
   "web_search",
   "request_tools",
+  "create_tool",
+  "update_tool",
+  "list_tools",
+  "delete_tool",
 ]);
 
 for (const tool of registry.getAll()) {

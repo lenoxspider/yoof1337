@@ -22,6 +22,7 @@ import { toolDefinitions } from "../tools/definitions.js";
 import { taskStore } from "../tasks/taskStore.js";
 import { registry } from "../tools/registry.js";
 import { treeDirectory } from "../tools/treeDirectory.js";
+import { loadCustomTools } from "../tools/dynamicTools.js";
 import {
   applyStoredSession,
   defaultSessionsDir,
@@ -236,6 +237,8 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   const persist = async (): Promise<void> => {
     await logger.flush();
   };
+
+  const customToolCount = await loadCustomTools(sandbox.root);
 
   console.log(`yoof1337 -- model: ${client.model} | sandbox: ${sandbox.root}`);
   if (dotenv.loaded) console.log(color(`loaded env: ${dotenv.path}`, ansi.dim));
@@ -502,6 +505,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     title: "◆ yoof1337",
     subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
   }) as any;
+  await loadCustomTools(sandbox.root);
   app.start();
   if (client.checkHealth) {
     client.checkHealth().then((h) => {
