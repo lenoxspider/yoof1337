@@ -98,6 +98,16 @@ function PromptInput({
     (input, key) => {
       if (!focus) return;
 
+      // Ignore mouse sequences (e.g. scroll wheel or clicks)
+      if (
+        input.startsWith("\x1b") ||
+        input.startsWith("[<") ||
+        input.startsWith("<") ||
+        /^\x1b?\[?<\d+;\d+;\d+[Mm]/.test(input)
+      ) {
+        return;
+      }
+
       // Handle Ctrl shortcuts for line editing
       if (key.ctrl) {
         if (input === "a" || input === "\x01") {
@@ -121,12 +131,19 @@ function PromptInput({
           onChange(value.slice(0, cursorOffset));
           return;
         }
-        // Let other Ctrl keys (Ctrl+B, Ctrl+O, Ctrl+T, Ctrl+C) pass through to parent without typing characters
+        // Let other Ctrl keys pass through to parent
         return;
       }
 
-      // Ignore up/down, tab, return so parent keyhandlers can process them
-      if (key.upArrow || key.downArrow || key.tab || (key.shift && key.tab)) {
+      // Ignore navigation / scrolling keys so parent keyhandlers can process them
+      if (
+        key.pageUp ||
+        key.pageDown ||
+        key.upArrow ||
+        key.downArrow ||
+        key.tab ||
+        (key.shift && key.tab)
+      ) {
         return;
       }
 
@@ -169,11 +186,6 @@ function PromptInput({
           const next = value.slice(0, cursorOffset) + value.slice(cursorOffset + 1);
           onChange(next);
         }
-        return;
-      }
-
-      // Filter out rogue escape codes (like stray mouse tracking or CSI sequences)
-      if (input.startsWith("\x1b") || input.startsWith("[<")) {
         return;
       }
 
@@ -581,10 +593,14 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
         process.stdin.setRawMode(true);
         process.stdin.resume();
       }
+      // Enable SGR mouse tracking mode (scroll wheel support)
+      process.stdout.write("\x1b[?1000h\x1b[?1006h");
+
       const instance = render(
         <InkRoot
           store={store}
           onExit={() => {
+            process.stdout.write("\x1b[?1000l\x1b[?1006l");
             if (sigintHandler) sigintHandler();
             else {
               instance.unmount();
@@ -596,11 +612,13 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
         { exitOnCtrlC: false }
       );
       unmount = () => {
+        process.stdout.write("\x1b[?1000l\x1b[?1006l");
         instance.unmount();
         if (process.stdin.isTTY) process.stdin.setRawMode(false);
       };
     },
     stop: () => {
+      process.stdout.write("\x1b[?1000l\x1b[?1006l");
       if (unmount) unmount();
       unmount = null;
     },
@@ -667,6 +685,24 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
     if (snap.modal || snap.pastePreview) return;
     if (snap.fullOutputModal || snap.fullTranscriptModal) return;
 
+    // Handle mouse wheel scrolling
+    const mouseMatch = /^\x1b?\[?<(\d+);(\d+);(\d+)[Mm]/.exec(input);
+    if (mouseMatch) {
+      const button = parseInt(mouseMatch[1], 10);
+      if (button === 64) {
+        // Wheel Up: scroll up into history
+        const limit = Math.max(0, snap.transcript.length - viewportRows);
+        setScrollOffset((o) => Math.min(limit, o + 3));
+        return;
+      }
+      if (button === 65) {
+        // Wheel Down: scroll down towards bottom
+        setScrollOffset((o) => Math.max(0, o - 3));
+        return;
+      }
+      return;
+    }
+
     // Ctrl+C to exit
     if (key.ctrl && (input === "c" || input === "\x03")) {
       onExit();
@@ -711,7 +747,7 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
       }
     }
 
-    // Viewport Scroll
+    // Viewport Scroll: PageUp, PageDown, Shift+Up/Down, Ctrl+Up/Down
     if (key.pageUp) {
       const limit = Math.max(0, snap.transcript.length - viewportRows);
       const amount = Math.max(1, Math.floor(viewportRows / 2));
@@ -723,16 +759,16 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
       setScrollOffset((o) => Math.max(0, o - amount));
       return;
     }
-    if (key.shift && key.upArrow) {
+    if ((key.shift || key.ctrl) && key.upArrow) {
       const limit = Math.max(0, snap.transcript.length - viewportRows);
       setScrollOffset((o) => Math.min(limit, o + 1));
       return;
     }
-    if (key.shift && key.downArrow) {
+    if ((key.shift || key.ctrl) && key.downArrow) {
       setScrollOffset((o) => Math.max(0, o - 1));
       return;
     }
-    if (scrollOffset > 0 && key.return) {
+    if (scrollOffset > 0 && (key.return || key.escape)) {
       setScrollOffset(0);
       return;
     }
@@ -846,7 +882,7 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
       {scrollOffset > 0 && (
         <Box paddingX={1}>
           <Text backgroundColor={THEME.scrollBg} color={THEME.scrollFg} bold>
-            {" ▲ SCROLLED (" + scrollOffset + " lines) • Enter to return ▲ "}
+            {" ▲ SCROLLED (" + scrollOffset + " lines) • Enter/Esc to return ▲ "}
           </Text>
         </Box>
       )}
@@ -1021,7 +1057,7 @@ function getHotkeyLegend(state: {
   }
   items.push("^O Expand", "^T Transcript");
   if (state.scrolled) {
-    items.push("Enter Return");
+    items.push("Enter/Esc Return");
   }
   items.push("PgUp/Dn Scroll", "Tab Complete", "/help", "^C Exit");
   return items.join(" │ ");
@@ -1065,6 +1101,14 @@ function FullOutputModal({ text, onClose }: { text: string; onClose: () => void 
   const maxLines = (process.stdout.rows ?? 24) - 4;
 
   useInput((input, key) => {
+    const mouseMatch = /^\x1b?\[?<(\d+);(\d+);(\d+)[Mm]/.exec(input);
+    if (mouseMatch) {
+      const button = parseInt(mouseMatch[1], 10);
+      if (button === 64) setOffset((o) => Math.max(0, o - 3));
+      if (button === 65) setOffset((o) => Math.min(Math.max(0, lines.length - maxLines), o + 3));
+      return;
+    }
+
     if (key.upArrow) setOffset((o) => Math.max(0, o - 1));
     else if (key.downArrow) setOffset((o) => Math.min(Math.max(0, lines.length - maxLines), o + 1));
     else if (key.pageUp) setOffset((o) => Math.max(0, o - Math.floor(maxLines / 2)));
@@ -1091,7 +1135,7 @@ function FullOutputModal({ text, onClose }: { text: string; onClose: () => void 
         ))}
       </Box>
       <Box marginTop={1}>
-        <Text color={THEME.muted}>Up/Down / PgUp/PgDn to scroll • Esc or ^O to close</Text>
+        <Text color={THEME.muted}>Up/Down / PgUp/PgDn / Mouse Wheel to scroll • Esc or ^O to close</Text>
       </Box>
     </Box>
   );
@@ -1102,6 +1146,14 @@ function FullTranscriptModal({ transcript, onClose }: { transcript: string[]; on
   const [offset, setOffset] = useState(() => Math.max(0, transcript.length - maxLines));
 
   useInput((input, key) => {
+    const mouseMatch = /^\x1b?\[?<(\d+);(\d+);(\d+)[Mm]/.exec(input);
+    if (mouseMatch) {
+      const button = parseInt(mouseMatch[1], 10);
+      if (button === 64) setOffset((o) => Math.max(0, o - 3));
+      if (button === 65) setOffset((o) => Math.min(Math.max(0, transcript.length - maxLines), o + 3));
+      return;
+    }
+
     if (key.upArrow) setOffset((o) => Math.max(0, o - 1));
     else if (key.downArrow) setOffset((o) => Math.min(Math.max(0, transcript.length - maxLines), o + 1));
     else if (key.pageUp) setOffset((o) => Math.max(0, o - Math.floor(maxLines / 2)));
@@ -1128,7 +1180,7 @@ function FullTranscriptModal({ transcript, onClose }: { transcript: string[]; on
         ))}
       </Box>
       <Box marginTop={1}>
-        <Text color={THEME.muted}>Up/Down / PgUp/PgDn to scroll • Esc or ^T to close</Text>
+        <Text color={THEME.muted}>Up/Down / PgUp/PgDn / Mouse Wheel to scroll • Esc or ^T to close</Text>
       </Box>
     </Box>
   );
