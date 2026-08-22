@@ -18,7 +18,7 @@ import { progressDetail, turnSummary, formatTokens } from "./format.js";
 
 import { hintForToolResult } from "./hints.js";
 import { execa } from "execa";
-import { toolDefinitions } from "../tools/definitions.js";
+import { toolDefinitions, resetToolsToCore } from "../tools/definitions.js";
 import { taskStore } from "../tasks/taskStore.js";
 import { registry } from "../tools/registry.js";
 import { treeDirectory } from "../tools/treeDirectory.js";
@@ -356,11 +356,33 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       }
       continue;
     }
-    if (line === "/tools") {
-      const categories = registry.getAvailableCategories();
-      for (const cat of categories) {
-        const statusBadge = cat.active ? color("[active]", ansi.green) : color("[inactive]", ansi.dim);
-        console.log(`${color(cat.category, ansi.bold)} ${statusBadge}: ${cat.tools.join(", ")}`);
+    if (line === "/tools" || line.startsWith("/tools ")) {
+      const parts = line.split(/\s+/);
+      const sub = parts[1]?.toLowerCase();
+      const target = parts[2]?.toLowerCase();
+
+      if (sub === "reset") {
+        resetToolsToCore();
+        console.log(color("✓ Tools reset to default lean core set.", ansi.green));
+      } else if (sub === "activate" && target) {
+        const req = registry.get("request_tools");
+        if (req) {
+          const res = await req.execute({ category: target, action: "activate" }, sandbox);
+          console.log(color(res, ansi.green));
+        }
+      } else if (sub === "deactivate" && target) {
+        const req = registry.get("request_tools");
+        if (req) {
+          const res = await req.execute({ category: target, action: "deactivate" }, sandbox);
+          console.log(color(res, ansi.yellow));
+        }
+      } else {
+        const categories = registry.getAvailableCategories();
+        for (const cat of categories) {
+          const statusBadge = cat.active ? color("[active]", ansi.green) : color("[inactive]", ansi.dim);
+          console.log(`${color(cat.category, ansi.bold)} ${statusBadge}: ${cat.tools.join(", ")}`);
+        }
+        console.log(color("Usage: /tools | /tools reset | /tools activate <cat> | /tools deactivate <cat>", ansi.dim));
       }
       continue;
     }
@@ -757,11 +779,33 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
         }
         continue;
       }
-      if (line === "/tools") {
-        const categories = registry.getAvailableCategories();
-        for (const cat of categories) {
-          const statusBadge = cat.active ? color("[active]", ansi.green) : color("[inactive]", ansi.dim);
-          app.println(`${color(cat.category, ansi.bold)} ${statusBadge}: ${cat.tools.join(", ")}`);
+      if (line === "/tools" || line.startsWith("/tools ")) {
+        const parts = line.split(/\s+/);
+        const sub = parts[1]?.toLowerCase();
+        const target = parts[2]?.toLowerCase();
+
+        if (sub === "reset") {
+          resetToolsToCore();
+          app.println(color("✓ Tools reset to default lean core set.", ansi.green));
+        } else if (sub === "activate" && target) {
+          const req = registry.get("request_tools");
+          if (req) {
+            const res = await req.execute({ category: target, action: "activate" }, sandbox);
+            app.println(color(res, ansi.green));
+          }
+        } else if (sub === "deactivate" && target) {
+          const req = registry.get("request_tools");
+          if (req) {
+            const res = await req.execute({ category: target, action: "deactivate" }, sandbox);
+            app.println(color(res, ansi.yellow));
+          }
+        } else {
+          const categories = registry.getAvailableCategories();
+          for (const cat of categories) {
+            const statusBadge = cat.active ? color("[active]", ansi.green) : color("[inactive]", ansi.dim);
+            app.println(`${color(cat.category, ansi.bold)} ${statusBadge}: ${cat.tools.join(", ")}`);
+          }
+          app.println(color("Usage: /tools | /tools reset | /tools activate <cat> | /tools deactivate <cat>", ansi.dim));
         }
         continue;
       }

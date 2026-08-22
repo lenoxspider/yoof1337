@@ -4,6 +4,7 @@ import type { CompactionConfig } from "../config.js";
 import type { AgentState } from "./state.js";
 import { worldStateSummary } from "./state.js";
 import { execa } from "execa";
+import { resetToolsToCore } from "../tools/definitions.js";
 
 const SUMMARIZE_INSTRUCTION = `You are summarizing a tool-using coding agent session for context compaction.
 Return STRICT JSON ONLY with this schema:
@@ -204,6 +205,7 @@ export async function compact(
   rebuilt.push(...tail);
 
   state.messages = rebuilt;
+  resetToolsToCore();
 }
 
 async function getRepoSnapshot(cwd?: string): Promise<string> {

@@ -1190,7 +1190,7 @@ registry.register({
 
 // ── Tier assignments ──────────────────────────────────────────────────────────
 
-const CORE_TOOLS = new Set([
+export const LEAN_CORE_TOOLS = new Set([
   "read_file",
   "write_file",
   "edit_file",
@@ -1201,13 +1201,17 @@ const CORE_TOOLS = new Set([
   "note_decision",
 ]);
 
-for (const tool of registry.getAll()) {
-  if (CORE_TOOLS.has(tool.definition.name)) {
-    registry.setTier(tool.definition.name, "core");
-  } else {
-    registry.setTier(tool.definition.name, "extended");
+export function resetToolsToCore(): void {
+  for (const tool of registry.getAll()) {
+    if (LEAN_CORE_TOOLS.has(tool.definition.name)) {
+      registry.setTier(tool.definition.name, "core");
+    } else {
+      registry.setTier(tool.definition.name, "extended");
+    }
   }
 }
+
+resetToolsToCore();
 
 // ── request_tools meta-tool (always core) ─────────────────────────────────────
 
@@ -1217,13 +1221,18 @@ registry.register({
   tier: "core",
   definition: {
     name: "request_tools",
-    description: "Request additional specialized tools to be made available. Available categories: 'git' (git operations), 'gh' (GitHub CLI), 'files' (tree, delete, move, copy, excerpt, patch, notebook), 'tasks' (sub-agents & task orchestration), 'web' (search & fetch), 'mcp' (Model Context Protocol), 'custom' (create/update/delete tools), 'all' (activate everything).",
+    description: "Activate, deactivate, or reset specialized tool categories. Available categories: 'git', 'gh', 'files', 'tasks', 'web', 'mcp', 'custom', 'planning', 'all', 'reset'. Actions: 'activate', 'deactivate', 'reset'.",
     inputSchema: {
       type: "object",
       properties: {
         category: {
           type: "string",
-          description: "Category to activate: 'git', 'gh', 'files', 'tasks', 'web', 'mcp', 'custom', 'planning', 'all', or an exact tool name.",
+          description: "Category to manage: 'git', 'gh', 'files', 'tasks', 'web', 'mcp', 'custom', 'planning', 'all', 'reset', or an exact tool name.",
+        },
+        action: {
+          type: "string",
+          enum: ["activate", "deactivate", "reset"],
+          description: "Action to perform (default: 'activate'). Use 'reset' to return to lean core tools.",
         },
       },
       required: ["category"],
@@ -1231,6 +1240,13 @@ registry.register({
   },
   execute: async (input) => {
     const category = String(input.category ?? "").toLowerCase().trim();
+    const action = String(input.action ?? "activate").toLowerCase().trim();
+
+    if (action === "reset" || category === "reset") {
+      resetToolsToCore();
+      return `Tools reset to default lean core set (${Array.from(LEAN_CORE_TOOLS).join(", ")}).`;
+    }
+
     const activations: Record<string, string[]> = {
       git: ["git_status", "git_diff", "git_commit", "git_add", "git_checkout", "git_log"],
       gh: ["gh_auth_status", "gh_pr_view", "gh_pr_diff", "gh_issue_view", "gh_repo_view", "gh_pr_create", "gh_pr_comment", "gh_pr_checkout"],
@@ -1244,30 +1260,34 @@ registry.register({
 
     if (category === "all") {
       for (const tool of registry.getAll()) {
-        registry.setTier(tool.definition.name, "core");
+        registry.setTier(tool.definition.name, action === "deactivate" ? (LEAN_CORE_TOOLS.has(tool.definition.name) ? "core" : "extended") : "core");
       }
-      return `All ${registry.getAll().length} tools are now active.`;
+      return action === "deactivate" ? "Deactivated all extended tools. Returning to lean core." : `All ${registry.getAll().length} tools are now active.`;
     }
 
     const toolNames = activations[category];
     if (!toolNames) {
-      // Try activating by exact tool name
+      // Try by exact tool name
       const tool = registry.get(category);
       if (tool) {
-        registry.setTier(category, "core");
-        return `Activated tool: ${category}`;
+        if (LEAN_CORE_TOOLS.has(category) && action === "deactivate") {
+          return `Tool "${category}" is a fundamental core tool and cannot be deactivated.`;
+        }
+        registry.setTier(category, action === "deactivate" ? "extended" : "core");
+        return `${action === "deactivate" ? "Deactivated" : "Activated"} tool: ${category}`;
       }
-      return `Unknown category "${category}". Available: ${Object.keys(activations).join(", ")}, all, or an exact tool name.`;
+      return `Unknown category "${category}". Available: ${Object.keys(activations).join(", ")}, all, reset, or an exact tool name.`;
     }
 
-    const activated: string[] = [];
+    const changed: string[] = [];
     for (const name of toolNames) {
       if (registry.get(name)) {
-        registry.setTier(name, "core");
-        activated.push(name);
+        if (LEAN_CORE_TOOLS.has(name) && action === "deactivate") continue;
+        registry.setTier(name, action === "deactivate" ? "extended" : "core");
+        changed.push(name);
       }
     }
-    return `Activated ${activated.length} tool(s): ${activated.join(", ")}`;
+    return `${action === "deactivate" ? "Deactivated" : "Activated"} ${changed.length} tool(s): ${changed.join(", ")}`;
   },
 });
 registry.setTier("request_tools", "core");
