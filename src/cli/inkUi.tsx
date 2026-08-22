@@ -62,6 +62,7 @@ const SLASH_COMMANDS = [
   { cmd: "/tools", desc: "list all registered tools" },
   { cmd: "/tree", desc: "print visual directory tree" },
   { cmd: "/prompt", desc: "view or reload custom instructions" },
+  { cmd: "/permission", desc: "change permission mode (strict, auto)" },
   { cmd: "/stats", desc: "view token speed & session analytics" },
   { cmd: "/model", desc: "show or switch active model/provider" },
   { cmd: "/sessions", desc: "list saved sessions" },

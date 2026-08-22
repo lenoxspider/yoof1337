@@ -460,6 +460,33 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       }
       continue;
     }
+    if (line === "/permission" || line.startsWith("/permission ") || line === "/permissions" || line.startsWith("/permissions ")) {
+      const parts = line.split(/\s+/);
+      const mode = parts[1]?.toLowerCase();
+
+      if (mode === "auto" || mode === "yolo" || mode === "never") {
+        permissions.yolo = true;
+        permissions.approvalPolicy = "never";
+        console.log(color("✓ Permission mode set to AUTO (all mutations auto-approved)", ansi.green));
+      } else if (mode === "strict" || mode === "prompt" || mode === "untrusted") {
+        permissions.yolo = false;
+        permissions.approvalPolicy = "untrusted";
+        console.log(color("✓ Permission mode set to STRICT (confirmation required for all mutations)", ansi.yellow));
+      } else if (mode === "reset") {
+        if (permissions.rules) permissions.rules.alwaysAllow = [];
+        console.log(color("✓ Session auto-allowed rules cleared.", ansi.green));
+      } else {
+        const isAuto = permissions.yolo || permissions.approvalPolicy === "never";
+        console.log(color("\n🛡️ Permission Configuration", ansi.bold));
+        console.log(`  • Active Mode:     ${isAuto ? color("AUTO (yolo)", ansi.green) : color("STRICT (ask confirmation)", ansi.yellow)}`);
+        console.log(`  • Approval Policy: ${permissions.approvalPolicy}`);
+        if (permissions.rules && permissions.rules.alwaysAllow.length > 0) {
+          console.log(`  • Session Allowed: ${permissions.rules.alwaysAllow.join(", ")}`);
+        }
+        console.log(color("\nUsage: /permission strict | /permission auto | /permission reset\n", ansi.dim));
+      }
+      continue;
+    }
     if (line === "/stats") {
       const elapsedSec = Math.max(0.1, stats.totalGenerationTimeMs / 1000);
       const speed = (stats.totalCompletionTokens / elapsedSec).toFixed(1);
@@ -930,6 +957,33 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
           app.println(state.systemPrompt);
           app.println(color("Tip: Place an AGENTS.md, CLAUDE.md, or .yoof1337/system_prompt.md in your project root.", ansi.dim));
           app.println(color("Use '/prompt reload' to refresh instructions after editing.", ansi.dim));
+        }
+        continue;
+      }
+      if (line === "/permission" || line.startsWith("/permission ") || line === "/permissions" || line.startsWith("/permissions ")) {
+        const parts = line.split(/\s+/);
+        const mode = parts[1]?.toLowerCase();
+
+        if (mode === "auto" || mode === "yolo" || mode === "never") {
+          permissions.yolo = true;
+          permissions.approvalPolicy = "never";
+          app.println(color("✓ Permission mode set to AUTO (all mutations auto-approved)", ansi.green));
+        } else if (mode === "strict" || mode === "prompt" || mode === "untrusted") {
+          permissions.yolo = false;
+          permissions.approvalPolicy = "untrusted";
+          app.println(color("✓ Permission mode set to STRICT (confirmation required for all mutations)", ansi.yellow));
+        } else if (mode === "reset") {
+          if (permissions.rules) permissions.rules.alwaysAllow = [];
+          app.println(color("✓ Session auto-allowed rules cleared.", ansi.green));
+        } else {
+          const isAuto = permissions.yolo || permissions.approvalPolicy === "never";
+          app.println(color("🛡️ Permission Configuration", ansi.bold));
+          app.println(`  • Active Mode:     ${isAuto ? color("AUTO (yolo)", ansi.green) : color("STRICT (ask confirmation)", ansi.yellow)}`);
+          app.println(`  • Approval Policy: ${permissions.approvalPolicy}`);
+          if (permissions.rules && permissions.rules.alwaysAllow.length > 0) {
+            app.println(`  • Session Allowed: ${permissions.rules.alwaysAllow.join(", ")}`);
+          }
+          app.println(color("Usage: /permission strict | /permission auto | /permission reset", ansi.dim));
         }
         continue;
       }
