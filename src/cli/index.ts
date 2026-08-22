@@ -19,6 +19,9 @@ import { progressDetail, turnSummary, formatTokens } from "./format.js";
 import { hintForToolResult } from "./hints.js";
 import { execa } from "execa";
 import { toolDefinitions } from "../tools/definitions.js";
+import { taskStore } from "../tasks/taskStore.js";
+import { registry } from "../tools/registry.js";
+import { treeDirectory } from "../tools/treeDirectory.js";
 import {
   applyStoredSession,
   defaultSessionsDir,
@@ -315,9 +318,61 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     if (!line) continue;
 
     if (line === "/exit" || line === "/quit") break;
+    if (line === "/clear" || line === "/cls") {
+      console.clear();
+      continue;
+    }
+    if (line === "/reset" || line === "/new") {
+      state.messages = [{ role: "system", content: state.systemPrompt }];
+      state.world.filesTouched.clear();
+      state.world.commandsRun = [];
+      state.world.bgCommandsRun = [];
+      state.world.memory.decisions = [];
+      console.log(color("✓ Session reset. Conversation history and world state cleared.", ansi.green));
+      continue;
+    }
+    if (line === "/health" || line === "/ping") {
+      if (client.checkHealth) {
+        console.log(color("Pinging model endpoint...", ansi.dim));
+        const h = await client.checkHealth();
+        if (h.ok) console.log(color(`✓ Endpoint online: ${h.message}`, ansi.green));
+        else console.log(color(`⚠️ Endpoint warning: ${h.message}`, ansi.yellow));
+      } else {
+        console.log(color(`Active model: ${client.model} (no custom health probe)`, ansi.dim));
+      }
+      continue;
+    }
+    if (line === "/tasks") {
+      const tasks = taskStore.list();
+      if (tasks.length === 0) console.log("(no active or queued tasks)");
+      else {
+        for (const t of tasks) {
+          console.log(`[${t.status}] ${t.id} (${t.assignee}) — ${t.prompt.slice(0, 80)}`);
+        }
+      }
+      continue;
+    }
+    if (line === "/tools") {
+      const categories = registry.getAvailableCategories();
+      for (const cat of categories) {
+        const statusBadge = cat.active ? color("[active]", ansi.green) : color("[inactive]", ansi.dim);
+        console.log(`${color(cat.category, ansi.bold)} ${statusBadge}: ${cat.tools.join(", ")}`);
+      }
+      continue;
+    }
+    if (line === "/tree") {
+      const treeOut = await treeDirectory({ maxDepth: 3 }, sandbox);
+      console.log(treeOut);
+      continue;
+    }
+    if (line === "/model") {
+      console.log(`Active Provider: ${providerName} | Model: ${client.model} | Context: ${client.contextWindow} tokens`);
+      console.log(`Available in config: ${Object.keys(config.providers).join(", ")}`);
+      continue;
+    }
     if (line === "/help") {
       console.log(
-        `${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session\n${color("/undo", ansi.cyan)}     git rollback\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
+        `${color("/clear", ansi.cyan)}    clear the console log\n${color("/reset", ansi.cyan)}    start a fresh conversation\n${color("/compact", ansi.cyan)}  summarize and shrink the conversation history\n${color("/state", ansi.cyan)}    show tracked world state and token estimate\n${color("/health", ansi.cyan)}   ping model endpoint health\n${color("/tasks", ansi.cyan)}    list background sub-agents and tasks\n${color("/tools", ansi.cyan)}    list all registered tools\n${color("/tree", ansi.cyan)}     print visual directory tree\n${color("/model", ansi.cyan)}    show active model and available providers\n${color("/sessions", ansi.cyan)} list saved sessions\n${color("/resume <id>", ansi.cyan)} resume a saved session\n${color("/save", ansi.cyan)}     save current session snapshot\n${color("/undo", ansi.cyan)}     rollback to last git checkpoint\n${color("/redo", ansi.cyan)}     step forward one git checkpoint\n${color("/status", ansi.cyan)}   git status\n${color("/diff", ansi.cyan)}     git diff\n${color("/gh auth", ansi.cyan)}  show gh auth status\n${color("/pr view <id>", ansi.cyan)} view PR\n${color("/pr diff <id>", ansi.cyan)} diff PR\n${color("/pr create <title>", ansi.cyan)} create PR\n${color("/pr comment <id>", ansi.cyan)} comment PR\n${color("/exit", ansi.cyan)}     quit`
       );
       continue;
     }
@@ -434,6 +489,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     start: () => void;
     stop: () => void;
     println: (t: string) => void;
+    clear?: () => void;
     setStatusline?: (t: string) => void;
     setStatus?: (t: string) => void;
     setTools?: (lines: string[]) => void;
@@ -661,12 +717,71 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
       app.println(`${color("you>", ansi.gray)} ${line}`);
 
       if (line === "/exit" || line === "/quit") break;
+      if (line === "/clear" || line === "/cls") {
+        app.clear?.();
+        continue;
+      }
+      if (line === "/reset" || line === "/new") {
+        state.messages = [{ role: "system", content: state.systemPrompt }];
+        state.world.filesTouched.clear();
+        state.world.commandsRun = [];
+        state.world.bgCommandsRun = [];
+        state.world.memory.decisions = [];
+        app.println(color("✓ Session reset. Conversation history and world state cleared.", ansi.green));
+        continue;
+      }
+      if (line === "/health" || line === "/ping") {
+        if (client.checkHealth) {
+          app.println(color("Pinging model endpoint...", ansi.dim));
+          const h = await client.checkHealth();
+          if (h.ok) app.println(color(`✓ Endpoint online: ${h.message}`, ansi.green));
+          else app.println(color(`⚠️ Endpoint warning: ${h.message}`, ansi.yellow));
+        } else {
+          app.println(color(`Active model: ${client.model} (no custom health probe)`, ansi.dim));
+        }
+        continue;
+      }
+      if (line === "/tasks") {
+        const tasks = taskStore.list();
+        if (tasks.length === 0) app.println("(no active or queued tasks)");
+        else {
+          for (const t of tasks) {
+            app.println(`[${t.status}] ${t.id} (${t.assignee}) — ${t.prompt.slice(0, 80)}`);
+          }
+        }
+        continue;
+      }
+      if (line === "/tools") {
+        const categories = registry.getAvailableCategories();
+        for (const cat of categories) {
+          const statusBadge = cat.active ? color("[active]", ansi.green) : color("[inactive]", ansi.dim);
+          app.println(`${color(cat.category, ansi.bold)} ${statusBadge}: ${cat.tools.join(", ")}`);
+        }
+        continue;
+      }
+      if (line === "/tree") {
+        const treeOut = await treeDirectory({ maxDepth: 3 }, sandbox);
+        app.println(treeOut);
+        continue;
+      }
+      if (line === "/model") {
+        app.println(`Active Provider: ${providerName} | Model: ${client.model} | Context: ${client.contextWindow} tokens`);
+        app.println(`Available in config: ${Object.keys(config.providers).join(", ")}`);
+        continue;
+      }
       if (line === "/help") {
+        app.println(`${color("/clear", ansi.cyan)}    clear the transcript log`);
+        app.println(`${color("/reset", ansi.cyan)}    start a fresh conversation session`);
         app.println(`${color("/compact", ansi.cyan)}  summarize and shrink the conversation history`);
         app.println(`${color("/state", ansi.cyan)}    show tracked world state and token estimate`);
+        app.println(`${color("/health", ansi.cyan)}   ping model endpoint health`);
+        app.println(`${color("/tasks", ansi.cyan)}    list background sub-agents and tasks`);
+        app.println(`${color("/tools", ansi.cyan)}    list all registered tools`);
+        app.println(`${color("/tree", ansi.cyan)}     print visual directory tree`);
+        app.println(`${color("/model", ansi.cyan)}    show active model and available providers`);
         app.println(`${color("/sessions", ansi.cyan)} list saved sessions`);
         app.println(`${color("/resume <id>", ansi.cyan)} resume a saved session`);
-        app.println(`${color("/save", ansi.cyan)}     save current session`);
+        app.println(`${color("/save", ansi.cyan)}     save current session snapshot`);
         app.println(`${color("/undo", ansi.cyan)}     step back one checkpoint`);
         app.println(`${color("/redo", ansi.cyan)}     step forward one checkpoint`);
         app.println(`${color("/status", ansi.cyan)}   git status`);

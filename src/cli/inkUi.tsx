@@ -52,14 +52,22 @@ const THEME = {
  * ────────────────────────────────────────────────────────────────────────── */
 
 const SLASH_COMMANDS = [
+  { cmd: "/clear", desc: "clear the transcript log" },
+  { cmd: "/reset", desc: "start a fresh conversation session" },
   { cmd: "/compact", desc: "summarize and shrink history" },
   { cmd: "/state", desc: "show tracked world state" },
+  { cmd: "/health", desc: "ping model endpoint health" },
+  { cmd: "/tasks", desc: "list background sub-agents & tasks" },
+  { cmd: "/tools", desc: "list all registered tools" },
+  { cmd: "/tree", desc: "print visual directory tree" },
+  { cmd: "/model", desc: "show or switch active model/provider" },
   { cmd: "/sessions", desc: "list saved sessions" },
   { cmd: "/resume", desc: "resume a saved session" },
-  { cmd: "/save", desc: "save current session" },
-  { cmd: "/undo", desc: "git rollback" },
-  { cmd: "/status", desc: "git status" },
-  { cmd: "/diff", desc: "git diff" },
+  { cmd: "/save", desc: "save current session snapshot" },
+  { cmd: "/undo", desc: "rollback to last git checkpoint" },
+  { cmd: "/redo", desc: "step forward one git checkpoint" },
+  { cmd: "/status", desc: "show git status" },
+  { cmd: "/diff", desc: "show git diff" },
   { cmd: "/gh auth", desc: "show gh auth status" },
   { cmd: "/pr view", desc: "view PR" },
   { cmd: "/pr diff", desc: "diff PR" },
@@ -300,6 +308,11 @@ class InkStore {
     const next = [...this.snapshot.transcript];
     for (const l of String(text ?? "").split(/\r?\n/)) next.push(l);
     this.snapshot = { ...this.snapshot, transcript: next };
+    this.emit();
+  }
+
+  clearTranscript(): void {
+    this.snapshot = { ...this.snapshot, transcript: [] };
     this.emit();
   }
 
@@ -572,6 +585,7 @@ export type InkUi = {
   start: () => void;
   stop: () => void;
   println: (text: string) => void;
+  clear: () => void;
   setStatus: (text: string) => void;
   setBusy: (busy: null | { activity: string; startedAt: number; detail?: string }) => void;
   setStatusline: (text: string) => void;
@@ -623,6 +637,7 @@ export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
       unmount = null;
     },
     println: (t: string) => store.println(t),
+    clear: () => store.clearTranscript(),
     setStatus: (t: string) => store.setStatus(t),
     setBusy: (b) => store.setBusy(b),
     setStatusline: (t: string) => store.setStatusline(t),
