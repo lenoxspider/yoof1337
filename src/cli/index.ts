@@ -257,6 +257,7 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     yolo: args.yolo,
     approvalPolicy: args.yolo ? "never" : args.askForApproval,
     allowCommandPrefixes: state.world.permissions.allowCommandPrefixes,
+    rules: { alwaysAllow: [], alwaysDeny: [], alwaysAsk: [] },
   };
   const io = { print: (t: string) => console.log(t), rl, format: renderMarkdownToPlain, sessionLogger: logger };
 
@@ -518,6 +519,7 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     yolo: args.yolo,
     approvalPolicy: args.yolo ? "never" : args.askForApproval,
     allowCommandPrefixes: state.world.permissions.allowCommandPrefixes,
+    rules: { alwaysAllow: [], alwaysDeny: [], alwaysAsk: [] },
   };
   let turnStartedAt = Date.now();
   // Most recent real prompt-token count reported by the server (true context fill).

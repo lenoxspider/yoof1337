@@ -123,11 +123,16 @@ export class OpenAiCompatibleClient implements LlmClient {
       input: safeParseJson(tc.function?.arguments ?? "{}"),
     }));
 
-    // Compatibility fallback: some OpenAI-compatible servers (including some llama.cpp configs)
-    // may return tool call intent as plain assistant content instead of `tool_calls`.
-    if (toolCalls.length === 0 && typeof message.content === "string") {
-      const inferred = inferToolCallFromContent(message.content);
-      if (inferred) toolCalls = [{ id: "call_0", name: inferred.name, input: inferred.input }];
+    let assistantContent = message.content ?? null;
+
+    // Compatibility fallback: some OpenAI-compatible servers (including llama.cpp, Qwen, DeepSeek)
+    // may stream tool calls as text tags (<tool_call>...</tool_call> or markdown JSON) instead of native tool_calls.
+    if (toolCalls.length === 0 && typeof assistantContent === "string" && assistantContent.trim()) {
+      const extracted = extractToolCallsFromText(assistantContent);
+      if (extracted.toolCalls.length > 0) {
+        toolCalls = extracted.toolCalls;
+        assistantContent = extracted.cleanedText || null;
+      }
     }
 
     const usage = data.usage
@@ -140,7 +145,7 @@ export class OpenAiCompatibleClient implements LlmClient {
         }
       : undefined;
 
-    return { text: message.content ?? null, toolCalls, usage };
+    return { text: assistantContent, toolCalls, usage };
   }
 }
 
@@ -175,32 +180,100 @@ function safeParseJson(raw: string): Record<string, unknown> {
   }
 }
 
-function inferToolCallFromContent(
-  content: string
-): { name: string; input: Record<string, unknown> } | null {
-  // Example observed from llama.cpp:
-  //   {{"name": "read_file", "arguments": {"path": "sample.txt"}}}
-  // Also handle single-brace JSON: {"name":"...", "arguments":{...}}
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  const slice = content.slice(start, end + 1);
+function extractToolCallsFromText(content: string): { toolCalls: ToolCallRequest[]; cleanedText: string } {
+  const toolCalls: ToolCallRequest[] = [];
+  let cleanedText = content;
 
-  // Some servers wrap JSON in double braces; normalize to a single JSON object.
-  const normalized = slice.replace(/^\{\{/, "{").replace(/\}\}$/, "}").trim();
+  // 1. Match XML <tool_call>...</tool_call> blocks (common in Qwen, Hermès, DeepSeek)
+  const toolCallTagRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = toolCallTagRegex.exec(content)) !== null) {
+    const raw = match[1].trim();
+    const parsed = parsePotentialToolJson(raw);
+    if (parsed) {
+      toolCalls.push({
+        id: `call_${toolCalls.length}`,
+        name: parsed.name,
+        input: parsed.input,
+      });
+    }
+  }
+
+  if (toolCalls.length > 0) {
+    cleanedText = cleanedText.replace(toolCallTagRegex, "").trim();
+    return { toolCalls, cleanedText };
+  }
+
+  // 2. Match Markdown fenced ```json ... ``` blocks containing tool calls
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const raw = match[1].trim();
+    const parsed = parsePotentialToolJson(raw);
+    if (parsed) {
+      toolCalls.push({
+        id: `call_${toolCalls.length}`,
+        name: parsed.name,
+        input: parsed.input,
+      });
+    }
+  }
+
+  if (toolCalls.length > 0) {
+    cleanedText = cleanedText.replace(codeBlockRegex, "").trim();
+    return { toolCalls, cleanedText };
+  }
+
+  // 3. Match raw JSON object { "name": "...", "arguments": { ... } } or { "tool": "...", "parameters": { ... } }
+  const parsed = parsePotentialToolJson(content);
+  if (parsed) {
+    toolCalls.push({
+      id: "call_0",
+      name: parsed.name,
+      input: parsed.input,
+    });
+    cleanedText = "";
+  }
+
+  return { toolCalls, cleanedText };
+}
+
+function parsePotentialToolJson(raw: string): { name: string; input: Record<string, unknown> } | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  const slice = raw.slice(start, end + 1).replace(/^\{\{/, "{").replace(/\}\}$/, "}").trim();
+
   let parsed: any;
   try {
-    parsed = JSON.parse(normalized);
+    parsed = JSON.parse(slice);
   } catch {
-    // Sometimes arguments may be a JSON string inside the object; try to salvage by removing leading/trailing braces noise.
     return null;
   }
 
-  const name = typeof parsed?.name === "string" ? parsed.name : null;
-  const args = parsed?.arguments;
-  const input = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : safeParseJson(String(args ?? "{}"));
-  if (!name) return null;
-  return { name, input };
+  if (!parsed || typeof parsed !== "object") return null;
+
+  // Pattern A: {"name": "read_file", "arguments": {...}}
+  if (typeof parsed.name === "string") {
+    const args = parsed.arguments ?? parsed.parameters ?? parsed.input ?? {};
+    const input = typeof args === "object" && args !== null ? args : safeParseJson(String(args));
+    return { name: parsed.name, input };
+  }
+
+  // Pattern B: {"tool": "read_file", "parameters": {...}}
+  if (typeof parsed.tool === "string") {
+    const args = parsed.parameters ?? parsed.arguments ?? parsed.input ?? {};
+    const input = typeof args === "object" && args !== null ? args : safeParseJson(String(args));
+    return { name: parsed.tool, input };
+  }
+
+  // Pattern C: {"action": "read_file", "action_input": {...}}
+  if (typeof parsed.action === "string") {
+    const args = parsed.action_input ?? parsed.parameters ?? parsed.arguments ?? {};
+    const input = typeof args === "object" && args !== null ? args : safeParseJson(String(args));
+    return { name: parsed.action, input };
+  }
+
+  return null;
 }
 
 export function createOpenAiClient(provider: ProviderConfig): LlmClient {

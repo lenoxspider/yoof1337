@@ -967,7 +967,7 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
             ))}
           </Box>
           <Box flexDirection="row" marginTop={1}>
-            <Text bold>Approve? [y/N]: </Text>
+            <Text bold>Approve? [y/a/n]: </Text>
             <PromptInput
               value={snap.modal.buffer}
               onChange={(v) => store.setModalBuffer(v)}

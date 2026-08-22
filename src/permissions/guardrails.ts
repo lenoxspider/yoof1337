@@ -139,26 +139,36 @@ export async function requestPermission(
   const ownRl: Questioner =
     rl ?? (await import("node:readline/promises")).default.createInterface({ input: process.stdin, output: process.stdout });
 
-  const prompt = `${box}\n${color("Approve? [1] Allow Once / [2] Allow Always / [3] Deny: ", ansi.bold)}`;
+  if (!opts.rules) {
+    opts.rules = { alwaysAllow: [], alwaysDeny: [], alwaysAsk: [] };
+  }
+
+  const prompt = `${box}\n${color("Approve? [y] Once / [a] Always / [n] Deny: ", ansi.bold)}`;
   if (!ownRl.isTui) console.log(`\n${box}\n`);
 
   try {
-    const answer = (await ownRl.question(ownRl.isTui ? prompt : color("Approve? [1] Allow Once / [2] Allow Always / [3] Deny: ", ansi.bold)))
+    const answer = (await ownRl.question(ownRl.isTui ? prompt : color("Approve? [y] Once / [a] Always / [n] Deny: ", ansi.bold)))
       .trim()
       .toLowerCase();
       
-    if (answer === "1" || answer === "allow once" || answer === "y") return { approved: true, input: finalInput };
-    if (answer === "2" || answer === "allow always" || answer === "a") {
-      if (opts.rules) {
-        if (!opts.rules.alwaysAllow.includes(toolName)) {
-          opts.rules.alwaysAllow.push(toolName);
+    if (answer === "1" || answer === "allow once" || answer === "y" || answer === "yes") {
+      return { approved: true, input: finalInput };
+    }
+    if (answer === "2" || answer === "allow always" || answer === "a" || answer === "always") {
+      if (!opts.rules.alwaysAllow.includes(toolName)) {
+        opts.rules.alwaysAllow.push(toolName);
+      }
+      if (isCommandTool(toolName) && typeof finalInput.command === "string") {
+        const prefix = commandSimilarityPrefix(finalInput.command);
+        if (prefix && !opts.rules.alwaysAllow.includes(prefix)) {
+          opts.rules.alwaysAllow.push(prefix);
+          if (!ownRl.isTui) console.log(color(`Always allowing similar commands: ${prefix}`, ansi.yellow));
         }
-        if (isCommandTool(toolName) && typeof finalInput.command === "string") {
-          const prefix = commandSimilarityPrefix(finalInput.command);
-          if (prefix && !opts.rules.alwaysAllow.includes(prefix)) {
-            opts.rules.alwaysAllow.push(prefix);
-            if (!ownRl.isTui) console.log(color(`Always allowing similar commands: ${prefix}`, ansi.yellow));
-          }
+      }
+      if (typeof finalInput.path === "string") {
+        const p = String(finalInput.path);
+        if (!opts.rules.alwaysAllow.includes(p)) {
+          opts.rules.alwaysAllow.push(p);
         }
       }
       return { approved: true, input: finalInput };

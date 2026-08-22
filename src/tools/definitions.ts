@@ -1192,34 +1192,20 @@ registry.register({
 
 const CORE_TOOLS = new Set([
   "read_file",
-  "read_file_excerpt",
   "write_file",
   "edit_file",
-  "delete_file",
-  "move_file",
-  "copy_file",
   "list_directory",
-  "tree_directory",
-  "run_command",
   "search_code",
-  "glob_files",
-  "git_status",
-  "git_diff",
-  "git_commit",
-  "git_add",
-  "git_log",
-  "note_decision",
-  "web_search",
+  "run_command",
   "request_tools",
-  "create_tool",
-  "update_tool",
-  "list_tools",
-  "delete_tool",
+  "note_decision",
 ]);
 
 for (const tool of registry.getAll()) {
   if (CORE_TOOLS.has(tool.definition.name)) {
     registry.setTier(tool.definition.name, "core");
+  } else {
+    registry.setTier(tool.definition.name, "extended");
   }
 }
 
@@ -1228,15 +1214,16 @@ for (const tool of registry.getAll()) {
 registry.register({
   mutating: false,
   category: "META",
+  tier: "core",
   definition: {
     name: "request_tools",
-    description: "Request additional tools to be made available. Use this when you need capabilities beyond the currently visible tools (e.g. git operations, GitHub CLI, web fetching, background commands, task management, MCP, notebooks). Call with a category or tool name.",
+    description: "Request additional specialized tools to be made available. Available categories: 'git' (git operations), 'gh' (GitHub CLI), 'files' (tree, delete, move, copy, excerpt, patch, notebook), 'tasks' (sub-agents & task orchestration), 'web' (search & fetch), 'mcp' (Model Context Protocol), 'custom' (create/update/delete tools), 'all' (activate everything).",
     inputSchema: {
       type: "object",
       properties: {
         category: {
           type: "string",
-          description: "Category or tool names to activate. Options: 'git' (git_checkout, gh_* tools), 'web' (web_fetch), 'tasks' (task_create, task_get, task_update, task_stop, task_output, agent_run, team_*, send_message, workspace_*), 'advanced_file' (apply_patch, edit_notebook, run_command_bg, check_command, kill_command), 'mcp' (mcp_list_resources, mcp_read_resource), 'planning' (plan_create, walkthrough_generate), 'all' (activate everything).",
+          description: "Category to activate: 'git', 'gh', 'files', 'tasks', 'web', 'mcp', 'custom', 'planning', 'all', or an exact tool name.",
         },
       },
       required: ["category"],
@@ -1245,11 +1232,13 @@ registry.register({
   execute: async (input) => {
     const category = String(input.category ?? "").toLowerCase().trim();
     const activations: Record<string, string[]> = {
-      git: ["git_checkout", "gh_auth_status", "gh_pr_view", "gh_pr_diff", "gh_issue_view", "gh_repo_view", "gh_pr_create", "gh_pr_comment", "gh_pr_checkout"],
-      web: ["web_fetch"],
+      git: ["git_status", "git_diff", "git_commit", "git_add", "git_checkout", "git_log"],
+      gh: ["gh_auth_status", "gh_pr_view", "gh_pr_diff", "gh_issue_view", "gh_repo_view", "gh_pr_create", "gh_pr_comment", "gh_pr_checkout"],
+      files: ["read_file_excerpt", "delete_file", "move_file", "copy_file", "tree_directory", "glob_files", "apply_patch", "edit_notebook", "run_command_bg", "check_command", "kill_command"],
       tasks: ["task_create", "task_get", "task_update", "task_list", "task_stop", "task_output", "agent_run", "workspace_merge", "workspace_delete", "team_create", "team_delete", "send_message"],
-      advanced_file: ["apply_patch", "edit_notebook", "run_command_bg", "check_command", "kill_command", "search_tools"],
+      web: ["web_search", "web_fetch"],
       mcp: ["mcp_list_resources", "mcp_read_resource"],
+      custom: ["create_tool", "update_tool", "list_tools", "delete_tool", "search_tools"],
       planning: ["plan_create", "walkthrough_generate"],
     };
 
@@ -1278,7 +1267,7 @@ registry.register({
         activated.push(name);
       }
     }
-    return `Activated ${activated.length} tools: ${activated.join(", ")}`;
+    return `Activated ${activated.length} tool(s): ${activated.join(", ")}`;
   },
 });
 registry.setTier("request_tools", "core");
