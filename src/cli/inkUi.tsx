@@ -1072,26 +1072,37 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
       {/* ── Permission Modal (overlay) ─────────────────────────────── */}
       {snap.modal && (
         <OverlayModal
-          title="⚠️  PERMISSION REQUESTED"
+          title="⚠️  PERMISSION REQUIRED"
           borderColor={THEME.warning}
-          width={Math.min(columns - 4, 70)}
+          width={Math.min(columns - 4, 76)}
         >
-          <Box marginY={1} flexDirection="column">
+          <Box marginY={1} flexDirection="column" paddingX={1}>
             {snap.modal.prompt.split(/\r?\n/).map((l, i) => (
-              <Text key={i}>{l}</Text>
+              <Box key={i}><AnsiLog raw={l} /></Box>
             ))}
           </Box>
-          <Box flexDirection="row" marginTop={1}>
-            <Text bold>Approve? [y/a/n]: </Text>
+
+          <Box flexDirection="row" marginTop={1} paddingX={1} alignItems="center">
+            <Text bold color={THEME.warning}>Decision: </Text>
             <PromptInput
               value={snap.modal.buffer}
               onChange={(v) => store.setModalBuffer(v)}
               onSubmit={() => store.submitModal()}
+              placeholder="y / a / n"
               focus={true}
             />
           </Box>
-          <Box marginTop={1}>
-            <Text color={THEME.muted}>Enter to confirm • Esc to cancel</Text>
+
+          <Box marginTop={1} paddingX={1} flexDirection="row">
+            <Text backgroundColor="#1c3b2b" color={THEME.success} bold> [y] Allow Once </Text>
+            <Text>  </Text>
+            <Text backgroundColor="#3d331a" color={THEME.warning} bold> [a] Always for Session </Text>
+            <Text>  </Text>
+            <Text backgroundColor="#3d1a1a" color={THEME.error} bold> [n] Deny </Text>
+          </Box>
+
+          <Box marginTop={1} paddingX={1}>
+            <Text color={THEME.muted}>Type y, a, or n and press Enter • Esc to Deny</Text>
           </Box>
           <InkModalKeys onCancel={() => store.cancelModal()} onExit={() => onExit()} />
         </OverlayModal>

@@ -130,12 +130,6 @@ export async function requestPermission(
     }
   }
 
-  // Stage 4: Interactive Prompt
-  const box = formatBox(color("permission required", ansi.bold, ansi.yellow), [
-    `${color("tool:", ansi.gray)} ${color(toolName, ansi.cyan)}`,
-    ...describe(toolName, finalInput).map((l) => `${color(">", ansi.gray)} ${l}`),
-  ]);
-
   const ownRl: Questioner =
     rl ?? (await import("node:readline/promises")).default.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -143,11 +137,21 @@ export async function requestPermission(
     opts.rules = { alwaysAllow: [], alwaysDeny: [], alwaysAsk: [] };
   }
 
-  const prompt = `${box}\n${color("Approve? [y] Once / [a] Always / [n] Deny: ", ansi.bold)}`;
-  if (!ownRl.isTui) console.log(`\n${box}\n`);
+  const lines = [
+    `${color("tool:", ansi.gray)} ${color(toolName, ansi.bold, ansi.cyan)}`,
+    ...describe(toolName, finalInput).map((l) => `${color(">", ansi.gray)} ${l}`),
+  ];
+
+  const tuiPrompt = lines.join("\n");
+  const plainBox = formatBox(color("permission required", ansi.bold, ansi.yellow), lines);
+
+  if (!ownRl.isTui) console.log(`\n${plainBox}\n`);
 
   try {
-    const answer = (await ownRl.question(ownRl.isTui ? prompt : color("Approve? [y] Once / [a] Always / [n] Deny: ", ansi.bold)))
+    const questionText = ownRl.isTui
+      ? tuiPrompt
+      : color("Approve? [y] Once / [a] Always / [n] Deny: ", ansi.bold);
+    const answer = (await ownRl.question(questionText))
       .trim()
       .toLowerCase();
       
