@@ -16,7 +16,7 @@ import { toStrictSchema } from "./schemaStrict.js";
 export class OpenAiCompatibleClient implements LlmClient {
   readonly model: string;
   readonly contextWindow: number;
-  private readonly baseUrl: string;
+  readonly baseUrl: string;
   private readonly apiKey: string | undefined;
   private readonly providerOpts: ProviderConfig;
 
@@ -33,6 +33,29 @@ export class OpenAiCompatibleClient implements LlmClient {
       throw new Error(
         `Missing API key: ${details} (never commit keys to public source control).`
       );
+    }
+  }
+
+  async checkHealth(): Promise<{ ok: boolean; message: string; models?: string[] }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
+      const res = await fetch(`${this.baseUrl}/models`, {
+        headers,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) {
+        return { ok: false, message: `HTTP ${res.status}: ${res.statusText}` };
+      }
+      const data = (await res.json()) as any;
+      const modelList = Array.isArray(data?.data) ? data.data.map((m: any) => m.id ?? m) : [];
+      return {
+        ok: true,
+        message: `Online (${modelList.length} model(s) available)`,
+        models: modelList,
+      };
+    } catch (err: any) {
+      return { ok: false, message: `Unreachable: ${err.message}` };
     }
   }
 

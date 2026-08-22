@@ -45,7 +45,9 @@ export interface LlmResponse {
 export interface LlmClient {
   readonly model: string;
   readonly contextWindow: number;
+  readonly baseUrl?: string;
   chat(messages: ChatMessage[], tools: ToolDefinition[], abortSignal?: AbortSignal): Promise<LlmResponse>;
+  checkHealth?(): Promise<{ ok: boolean; message: string; models?: string[] }>;
 }
 
 /** Rough token estimate (~4 chars/token). Good enough for compaction thresholds. */

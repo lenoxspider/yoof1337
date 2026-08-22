@@ -238,6 +238,12 @@ async function runPlain(args: CliArgs, sandbox: SandboxContext): Promise<void> {
   if (dotenv.loaded) console.log(color(`loaded env: ${dotenv.path}`, ansi.dim));
   console.log(color(`session: ${state.sessionId} (${sessionsDir})`, ansi.dim));
   if (args.yolo) console.log(color("! yolo mode: all tool calls auto-approved", ansi.yellow));
+  if (client.checkHealth) {
+    client.checkHealth().then((h) => {
+      if (h.ok) console.log(color(`✓ Endpoint online: ${h.message}`, ansi.green));
+      else console.log(color(`⚠️ Endpoint warning: ${h.message}`, ansi.yellow));
+    });
+  }
   console.log(color("type a task, or /help for commands\n", ansi.dim));
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -441,6 +447,12 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
   }) as any;
   app.start();
+  if (client.checkHealth) {
+    client.checkHealth().then((h) => {
+      if (h.ok) app.println(color(`✓ Endpoint online: ${h.message}`, ansi.green));
+      else app.println(color(`⚠️ Endpoint warning: ${h.message}`, ansi.yellow));
+    });
+  }
   const questioner = app.createQuestioner();
   const permissions = {
     yolo: args.yolo,
