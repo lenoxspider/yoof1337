@@ -618,8 +618,9 @@ async function runTui(args: CliArgs, sandbox: SandboxContext): Promise<void> {
     streamChunk?: (chunk: string) => void;
     endStream?: () => void;
   } = createInkUi({
-    title: "◆ yoof1337",
+    title: "yoof1337",
     subtitle: `🧠 model: ${client.model}  📁 sandbox: ${sandbox.root}`,
+    sandboxRoot: sandbox.root,
   }) as any;
   await loadCustomTools(sandbox.root);
   app.start();

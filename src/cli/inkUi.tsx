@@ -4,6 +4,7 @@ import { Box, Text, render, useInput } from "ink";
 import { useViewport } from "../hooks/useViewport.js";
 import { AnsiLog } from "../components/AnsiLog.js";
 import { OverlayModal } from "../components/OverlayModal.js";
+import { searchFilesForAutocomplete } from "./fileTagger.js";
 
 /* ──────────────────────────────────────────────────────────────────────────────
  * Theme — curated 256-color palette for a premium dark-terminal aesthetic
@@ -266,8 +267,10 @@ class InkStore {
   private snapshot: StoreSnapshot;
   private resolveLine: null | ((line: string) => void) = null;
   private resolveQuestion: null | ((answer: string) => void) = null;
+  private sandboxRoot?: string;
 
-  constructor(header: string, subtitle: string) {
+  constructor(header: string, subtitle: string, sandboxRoot?: string) {
+    this.sandboxRoot = sandboxRoot;
     this.snapshot = {
       transcript: [],
       status: "",
@@ -402,24 +405,53 @@ class InkStore {
     if (value.startsWith("/")) {
       const lower = value.toLowerCase();
       autocompleteItems = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(lower));
+      this.snapshot = {
+        ...this.snapshot,
+        input: value,
+        autocompleteItems,
+        autocompleteIndex: autocompleteItems.length > 0 ? 0 : -1,
+      };
+      this.emit();
+    } else {
+      const fileMatch = /(?:^|\s)@([a-zA-Z0-9_\-./\\]*)$/.exec(value);
+      if (fileMatch && this.sandboxRoot) {
+        const query = fileMatch[1];
+        searchFilesForAutocomplete(this.sandboxRoot, query, 8).then((files) => {
+          if (this.snapshot.input === value) {
+            const items = files.map((f) => ({ cmd: `@${f}`, desc: "file" }));
+            this.snapshot = {
+              ...this.snapshot,
+              autocompleteItems: items,
+              autocompleteIndex: items.length > 0 ? 0 : -1,
+            };
+            this.emit();
+          }
+        });
+      }
+      this.snapshot = {
+        ...this.snapshot,
+        input: value,
+        autocompleteItems: [],
+        autocompleteIndex: -1,
+      };
+      this.emit();
     }
-
-    this.snapshot = {
-      ...this.snapshot,
-      input: value,
-      autocompleteItems,
-      autocompleteIndex: autocompleteItems.length > 0 ? 0 : -1,
-    };
-    this.emit();
   }
 
   commitAutocomplete(): void {
     if (this.snapshot.autocompleteItems.length > 0 && this.snapshot.autocompleteIndex >= 0) {
       const selected = this.snapshot.autocompleteItems[this.snapshot.autocompleteIndex];
       if (selected) {
+        let nextInput = selected.cmd + " ";
+        if (selected.cmd.startsWith("@")) {
+          nextInput = this.snapshot.input.replace(/(?:^|\s)@([a-zA-Z0-9_\-./\\]*)$/, (match) => {
+            const prefix = match.startsWith(" ") ? " " : "";
+            return `${prefix}${selected.cmd} `;
+          });
+        }
         this.snapshot = {
           ...this.snapshot,
-          input: selected.cmd + " ",
+          input: nextInput,
           autocompleteItems: [],
           autocompleteIndex: -1,
         };
@@ -618,8 +650,62 @@ export type InkUi = {
   onSigInt: (handler: () => void) => void;
 };
 
-export function createInkUi(opts: { title: string; subtitle: string }): InkUi {
-  const store = new InkStore(opts.title, opts.subtitle);
+/* ──────────────────────────────────────────────────────────────────────────────
+ * UI Components
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function BusyLine({ busy }: { busy: { activity: string; startedAt: number; detail?: string } }) {
+  const [frame, setFrame] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setFrame((f) => (f + 1) % BRAILLE_FRAMES.length);
+      setElapsed(Math.max(0, Math.floor((Date.now() - busy.startedAt) / 1000)));
+    }, 80);
+    return () => clearInterval(timer);
+  }, [busy.startedAt]);
+
+  return (
+    <Box flexDirection="row" alignItems="center">
+      <Text color={THEME.spinner} bold>{BRAILLE_FRAMES[frame]} </Text>
+      <Text color={THEME.activity} bold>{busy.activity} </Text>
+      <Text color={THEME.muted}>({elapsed}s)</Text>
+      {busy.detail ? <Text color={THEME.muted}> • {busy.detail}</Text> : null}
+    </Box>
+  );
+}
+
+function TranscriptLine({ raw }: { raw: string }) {
+  if (raw.startsWith("you> ") || raw.startsWith("you: ")) {
+    const content = raw.replace(/^you[>:]\s*/, "");
+    return (
+      <Box flexDirection="row" marginY={0}>
+        <Text backgroundColor="#1a3b47" color={THEME.activeBorder} bold> ◆ YOU </Text>
+        <Text color={THEME.text}> {content}</Text>
+      </Box>
+    );
+  }
+  if (raw.startsWith("📎 Attached file context: ")) {
+    const files = raw.replace("📎 Attached file context: ", "");
+    return (
+      <Box flexDirection="row" marginY={0}>
+        <Text color="#5fd7ff">📎 </Text>
+        <Text color="#5fd7ff" italic>{files}</Text>
+      </Box>
+    );
+  }
+  return <AnsiLog raw={raw} />;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+ * Main Component: InkRoot
+ * ────────────────────────────────────────────────────────────────────────── */
+
+export function createInkUi(opts: { title: string; subtitle: string; sandboxRoot?: string }): InkUi {
+  const store = new InkStore(opts.title, opts.subtitle, opts.sandboxRoot);
   let unmount: null | (() => void) = null;
   let sigintHandler: (() => void) | null = null;
 
@@ -848,18 +934,18 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
 
   return (
     <Box flexDirection="column" height={rows} width={columns}>
-      {/* ── Header ─────────────────────────────────────────────────── */}
-      <Box>
-        <Text color={THEME.header} bold>  ◆ {snap.header}</Text>
-        <Text color={THEME.border}> ── </Text>
-        <Text color={THEME.subtitle}>{snap.subtitle}</Text>
+      {/* ── Header Badges ─────────────────────────────────────────── */}
+      <Box flexDirection="row" alignItems="center" paddingX={1} marginBottom={0}>
+        <Text color={THEME.header} bold>◆ {snap.header} </Text>
+        <Text color={THEME.border}>│ </Text>
+        <Text backgroundColor="#1c3b2b" color={THEME.success} bold> ● ONLINE </Text>
+        <Text color={THEME.border}> │ </Text>
+        <Text color={THEME.subtitle} bold>{snap.subtitle}</Text>
       </Box>
 
-      {/* ── Status Bar ─────────────────────────────────────────────── */}
-      <Box>
-        <Text backgroundColor={THEME.statusBarBg} color={THEME.statusBarFg}>
-          {statusBarText}
-        </Text>
+      {/* ── Status Bar / Context Meter ─────────────────────────────── */}
+      <Box paddingX={1} backgroundColor={THEME.statusBarBg}>
+        <Text color={THEME.statusBarFg}>{statusBarText}</Text>
       </Box>
 
       {/* ── Main Content: Split Pane ───────────────────────────────── */}
@@ -873,7 +959,7 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
           paddingX={1}
         >
           {view.map((l, i) => (
-            <Box key={i}><AnsiLog raw={l} /></Box>
+            <Box key={i}><TranscriptLine raw={l} /></Box>
           ))}
         </Box>
 
@@ -887,32 +973,37 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
             paddingX={1}
           >
             {/* Status */}
-            <Text color={THEME.sidebarHeader} bold>◼ STATUS</Text>
+            <Text color={THEME.header} bold>◼ STATUS</Text>
             {snap.busy ? (
-              <Text color={THEME.activity} wrap="truncate-end">
-                {"● "}{snap.busy.activity}
-              </Text>
+              <Box marginY={1}>
+                <BusyLine busy={snap.busy} />
+              </Box>
             ) : (
-              <Text color={THEME.muted}>● Idle</Text>
+              <Box marginY={1}>
+                <Text color={THEME.muted}>● Idle (ready)</Text>
+              </Box>
             )}
-            <Text>{" "}</Text>
 
             {/* Tools */}
-            <Text color={THEME.sidebarHeader} bold>◼ TOOLS</Text>
+            <Box marginTop={1}>
+              <Text color={THEME.subtitle} bold>◼ TOOL LOG</Text>
+            </Box>
             {snap.tools.length > 0 ? (
-              snap.tools.slice(-6).map((l, i) => (
-                <Text key={i} color={THEME.muted} wrap="truncate-end">{l}</Text>
-              ))
+              <Box flexDirection="column" marginTop={1}>
+                {snap.tools.slice(-8).map((l, i) => {
+                  const isSuccess = l.startsWith("✓");
+                  const isError = l.startsWith("✗");
+                  const badgeColor = isSuccess ? THEME.success : isError ? THEME.error : THEME.muted;
+                  return (
+                    <Text key={i} color={badgeColor} wrap="truncate-end">
+                      {l}
+                    </Text>
+                  );
+                })}
+              </Box>
             ) : (
-              <Text color={THEME.muted}>  (none)</Text>
+              <Text color={THEME.muted}>  (no tools run)</Text>
             )}
-            <Text>{" "}</Text>
-
-            {/* Info */}
-            <Text color={THEME.sidebarHeader} bold>◼ INFO</Text>
-            <Text color={THEME.muted} wrap="truncate-end">
-              {snap.status || "Ready"}
-            </Text>
           </Box>
         )}
       </Box>
@@ -1047,37 +1138,6 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
 /* ──────────────────────────────────────────────────────────────────────────────
  * Sub-components
  * ────────────────────────────────────────────────────────────────────────── */
-
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/** Animated braille spinner + activity label + elapsed timer. */
-function BusyLine({ busy }: { busy: { activity: string; startedAt: number; detail?: string } }): React.JSX.Element {
-  const [frame, setFrame] = useState(0);
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    const spin = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 100);
-    const clock = setInterval(() => setTick((t) => t + 1), 250);
-    return () => {
-      clearInterval(spin);
-      clearInterval(clock);
-    };
-  }, []);
-
-  const elapsed = Date.now() - busy.startedAt;
-  const secs = Math.floor(elapsed / 1000);
-  const timeStr = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
-
-  return (
-    <Text color={THEME.spinner}>
-      {SPINNER_FRAMES[frame]} <Text color={THEME.activity}>{busy.activity}</Text>
-      <Text color={THEME.muted}>
-        {" "}({timeStr}
-        {busy.detail ? ` · ${busy.detail}` : ""})
-      </Text>
-    </Text>
-  );
-}
 
 /** Context-aware hotkey legend for the footer. */
 function getHotkeyLegend(state: {
