@@ -320,13 +320,17 @@ class InkStore {
 
   streamChunk(chunk: string): void {
     const next = [...this.snapshot.transcript];
+    const parts = chunk.split(/\r?\n/);
     if (next.length === 0 || !this.isStreaming) {
-      next.push(chunk);
       this.isStreaming = true;
+      for (const p of parts) next.push(p);
     } else {
-      next[next.length - 1] += chunk;
+      next[next.length - 1] += parts[0];
+      for (let i = 1; i < parts.length; i++) {
+        next.push(parts[i]);
+      }
     }
-    this.snapshot = { ...this.snapshot, transcript: next.slice(-500) };
+    this.snapshot = { ...this.snapshot, transcript: next.slice(-1000) };
     this.emit();
   }
 
@@ -777,7 +781,7 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
   const [scrollOffset, setScrollOffset] = useState(0);
   const [prevLength, setPrevLength] = useState(snap.transcript.length);
 
-  const { columns, rows, viewportRows, isWide, sidebarWidth } = useViewport(8);
+  const { columns, rows, viewportRows, isWide, sidebarWidth } = useViewport(9);
 
   useEffect(() => store.subscribe(() => setSnap(store.get())), [store]);
 
@@ -795,14 +799,29 @@ function InkRoot({ store, onExit }: { store: InkStore; onExit: () => void }): Re
     }
   }, [snap.transcript.length, prevLength, viewportRows]);
 
-  // Compute visible transcript slice
-  const view = useMemo(() => {
-    const end = snap.transcript.length - scrollOffset;
-    const start = Math.max(0, end - viewportRows);
-    return snap.transcript.slice(start, end);
-  }, [snap.transcript, scrollOffset, viewportRows]);
-
   const showSidebar = isWide && snap.sidebarVisible;
+
+  // Compute visible transcript slice with visual line-wrapping budget
+  const view = useMemo(() => {
+    const paneWidth = Math.max(20, columns - (showSidebar ? sidebarWidth : 0) - 6);
+    const end = snap.transcript.length - scrollOffset;
+
+    let rowsUsed = 0;
+    let start = end;
+
+    for (let i = end - 1; i >= 0; i--) {
+      const line = snap.transcript[i] ?? "";
+      const stripped = line.replace(/\u001b\[[0-9;]*m/g, "");
+      const lineVisualRows = Math.max(1, Math.ceil(stripped.length / paneWidth));
+      if (rowsUsed + lineVisualRows > viewportRows && start < end) {
+        break;
+      }
+      rowsUsed += lineVisualRows;
+      start = i;
+    }
+
+    return snap.transcript.slice(start, end);
+  }, [snap.transcript, scrollOffset, viewportRows, columns, showSidebar, sidebarWidth]);
 
   // ── Global Input & Keybindings ──────────────────────────────────────────
 
