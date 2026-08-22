@@ -59,8 +59,14 @@ export interface AgentConfig {
 }
 
 const DEFAULTS: AgentConfig = {
-  provider: "llamacpp",
+  provider: "openai",
   providers: {
+    openai: {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      apiKeyEnv: "OPENAI_API_KEY",
+      contextWindow: 128000,
+    },
     llamacpp: {
       baseUrl: "http://219.122.229.5:45965/v1",
       model: "Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf",
@@ -114,7 +120,8 @@ export function loadConfig(configPath?: string): AgentConfig {
         path.join(process.cwd(), "yoof1337.json"),
         path.join(process.cwd(), "config.json"),
         path.join(homeDir, ".yoof1337.json"),
-        path.join(homeDir, "yoof1337.json")
+        path.join(homeDir, "yoof1337.json"),
+        path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), "../config.json"),
       ];
 
   for (const candidate of candidates) {
